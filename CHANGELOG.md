@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.0.0] - 2023-07-02
+## [1.0.0] - 2025-03-14
 
 ### Ajouté
 - Système RAG multimodal avec embeddings CLIP pour représenter texte et images dans le même espace vectoriel
