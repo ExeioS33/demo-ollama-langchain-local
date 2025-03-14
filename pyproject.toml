@@ -1,0 +1,22 @@
+[project]
+name = "langchain-course"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "langchain>=0.1.12",
+    "langchain-core>=0.2.20,<0.3.0",
+    "langchain-community>=0.0.29",
+    "langchain-ollama>=0.1.0",
+    "pydantic>=2.6.4",
+    "pydantic-core>=2.16.3",
+    "numpy",
+    "pandas",
+    "orjson>=3.9.10",
+    "tenacity>=8.2.3",
+    "typing-extensions>=4.9.0",
+    # Embeddings and vector stores
+    "gpt4all>=2.0.0",
+    "chromadb>=0.4.18",
+]
