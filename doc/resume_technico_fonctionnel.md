@@ -25,12 +25,14 @@ Cette classe est responsable de la génération d'embeddings pour les textes et 
 - `__init__(model_name="openai/clip-vit-base-patch32")` : Initialise l'embedder avec un modèle CLIP spécifique
 - `embed_text(texts: List[str]) -> np.ndarray` : Génère des embeddings pour une liste de textes
 - `embed_image(images: List[Union[str, Image.Image]]) -> np.ndarray` : Génère des embeddings pour une liste d'images
+- `embed_text_and_image(text: str, image: Image.Image) -> np.ndarray` : Génère un embedding combiné pour une paire texte-image
 
 **Caractéristiques techniques :**
 - Utilise le modèle CLIP de OpenAI via Hugging Face
 - Fonctionne sur CPU ou GPU (détection automatique)
 - Dimensionnalité des embeddings : 512 dimensions
 - Normalisation L2 des embeddings pour la similarité cosinus
+- Stratégie de fusion pour les embeddings combinés texte-image
 
 ### 2.2 MultimodalVectorStore
 
@@ -42,6 +44,7 @@ Cette classe gère le stockage et l'interrogation des embeddings multimodaux dan
 - `add_images(images: List[Union[str, Image.Image]], descriptions: Optional[List[str]], metadatas: Optional[List[Dict]]) -> List[str]` : Ajoute des images
 - `add_pdf(pdf_path: str, extract_images: bool=True) -> List[str]` : Extrait et ajoute le contenu d'un PDF (texte et images)
 - `query(query: Union[str, Image.Image], top_k: int=5, filter_metadata: Optional[Dict]=None) -> List[Dict]` : Interroge la base avec du texte ou une image
+- `query_text_and_image(text: str, image: Image.Image, top_k: int=5, filter_metadata: Optional[Dict]=None) -> List[Dict]` : Interroge la base avec une combinaison de texte et d'image
 
 **Caractéristiques techniques :**
 - Utilise ChromaDB comme base de données vectorielle
@@ -49,6 +52,7 @@ Cette classe gère le stockage et l'interrogation des embeddings multimodaux dan
 - Stockage persistant des données entre les sessions
 - Métadonnées enrichies pour chaque document
 - Filtrage des résultats par seuil de similarité (0.2 par défaut)
+- Support pour les requêtes multimodales combinant texte et image
 
 ### 2.3 MultimodalRAG
 
@@ -58,6 +62,7 @@ Cette classe intègre le magasin de vecteurs avec un modèle de langage (LLM) po
 - `__init__(llm_name="qwen2.5:3b", collection_name="multimodal_collection", temperature=0.2, max_tokens=1000, persist_directory="chroma_db")` : Initialise le système RAG
 - `add_document(document_path: str, document_type: str="auto", description: Optional[str]=None) -> List[str]` : Ajoute un document (texte, image ou PDF)
 - `query(query: Union[str, Image.Image], top_k: int=5, filter_metadata: Optional[Dict]=None) -> Dict` : Interroge le système avec contexte et génère une réponse
+- `query_text_and_image(text: str, image: Image.Image, top_k: int=5, filter_metadata: Optional[Dict]=None) -> Dict` : Interroge le système avec une combinaison de texte et d'image et génère une réponse
 
 **Caractéristiques techniques :**
 - Utilise Ollama comme interface pour les modèles de langage locaux
@@ -65,6 +70,7 @@ Cette classe intègre le magasin de vecteurs avec un modèle de langage (LLM) po
 - Contexte maximal de 4096 tokens
 - Prompt template optimisé pour éviter les hallucinations
 - Format de réponse structuré avec sources et scores de similarité
+- Support pour les requêtes multimodales combinant texte et image
 
 ## 3. Technologies Utilisées
 
@@ -109,8 +115,11 @@ Cette classe intègre le magasin de vecteurs avec un modèle de langage (LLM) po
 
 ### 4.2 Traitement des Requêtes
 
-1. **Analyse de la requête** : détection si texte ou image
-2. **Génération d'embedding** pour la requête
+1. **Analyse de la requête** : détection si texte, image ou combinaison texte-image
+2. **Génération d'embedding** pour la requête :
+   - Texte : utilisation du processeur de texte CLIP
+   - Image : utilisation du processeur d'image CLIP
+   - Combinaison texte-image : génération d'un embedding fusionné
 3. **Recherche de similarité** dans la base vectorielle
 4. **Filtrage des résultats** par score de similarité (seuil à 0.2)
 5. **Formatage du contexte** pour le LLM
@@ -121,17 +130,32 @@ Cette classe intègre le magasin de vecteurs avec un modèle de langage (LLM) po
 
 ### 5.1 Script de Démonstration
 
-Le script `multimodal_rag_demo.py` fournit une interface en ligne de commande avec les options :
+Le script `enhanced_multimodal_rag_demo.py` fournit une interface en ligne de commande avec les options :
 
-- **--add** : Ajoute un document au système
+- **--add-document** : Ajoute un document au système
 - **--query** : Effectue une requête textuelle
-- **--image_query** : Utilise une image pour la requête
+- **--image-query** : Utilise une image pour la requête
+- **--combined-query** : Effectue une requête combinée texte-image (nécessite --query et --image-query)
 - **--model** : Spécifie le modèle LLM à utiliser (défaut: qwen2.5:3b)
-- **--db_path** : Chemin vers la base de données (défaut: chroma_db)
-- **--collection** : Nom de la collection (défaut: multimodal_collection)
+- **--db-path** : Chemin vers la base de données (défaut: enhanced_vector_store)
+- **--collection** : Nom de la collection (défaut: enhanced_multimodal_collection)
 - **--reset** : Réinitialise la base de données
+- **--use-gpu** : Utilise le GPU pour FAISS si disponible
+- **--no-reranking** : Désactive le reranking pour cette requête
 
-### 5.2 Makefile
+### 5.2 Script de Test pour Requêtes Combinées
+
+Le script `test_combined_query.py` fournit une interface simplifiée pour tester spécifiquement les requêtes combinées texte-image :
+
+- **--model** : Spécifie le modèle LLM à utiliser
+- **--collection** : Nom de la collection
+- **--db-path** : Chemin vers la base de données
+- **--text** : Texte de la requête
+- **--image** : Chemin vers l'image à utiliser pour la requête (obligatoire)
+- **--top-k** : Nombre de résultats à récupérer
+- **--no-reranking** : Désactive le reranking pour cette requête
+
+### 5.3 Makefile
 
 Un Makefile fournit des commandes simplifiées :
 
@@ -143,7 +167,7 @@ Un Makefile fournit des commandes simplifiées :
 - **make add-text/add-image/add-pdf** : Ajoute différents types de documents
 - **make query/image-query** : Effectue des requêtes
 
-### 5.3 Notebook Interactif
+### 5.4 Notebook Interactif
 
 Un notebook Jupyter (`multimodal_rag_demo.ipynb`) fournit une démonstration interactive qui montre :
 
