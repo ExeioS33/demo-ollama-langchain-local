@@ -288,6 +288,150 @@ Réponse:
         # Formater la réponse finale
         return {"answer": answer, "sources": sources}
 
+    def query_text_and_image(
+        self,
+        text: str,
+        image: Union[str, Image.Image],
+        top_k: int = 5,
+        filter_metadata: Optional[Dict] = None,
+        use_reranking: bool = True,
+    ) -> Dict:
+        """
+        Interroge le système RAG avec une combinaison de texte et d'image.
+
+        Cette méthode permet de rechercher des documents qui correspondent
+        sémantiquement à la fois au texte et à l'image fournis, puis
+        de générer une réponse contextuelle basée sur les résultats.
+
+        Args:
+            text (str): Texte de la requête
+            image (Union[str, Image.Image]): Image de la requête (chemin ou objet PIL)
+            top_k (int): Nombre de résultats à récupérer pour le contexte
+            filter_metadata (Optional[Dict]): Filtre à appliquer sur les métadonnées
+            use_reranking (bool): Si True, utilise le reranking avancé
+
+        Returns:
+            Dict: Réponse du système RAG avec les sources utilisées
+        """
+        # Récupérer les résultats pertinents du magasin de vecteurs
+        results = self.vector_store.query_text_and_image(
+            text,
+            image,
+            top_k=top_k,
+            filter_metadata=filter_metadata,
+            use_reranking=use_reranking,
+        )
+
+        # Filtrer les résultats par score de similarité
+        results = [
+            r for r in results if r.get("similarity", 0) >= self.similarity_threshold
+        ]
+
+        if use_reranking and results and "rerank_score" in results[0]:
+            print(f"Résultats reordonnés en utilisant le reranker")
+            # Déjà classés par le reranker dans la méthode query_text_and_image() du magasin vectoriel
+        else:
+            # Classer par similarité décroissante
+            results = sorted(
+                results, key=lambda x: x.get("similarity", 0), reverse=True
+            )
+
+        # Préparer le contexte pour le LLM
+        context_pieces = []
+        sources = []
+
+        for i, result in enumerate(results):
+            # Formater différemment selon qu'il s'agit d'une image ou d'un texte
+            if result["is_image"]:
+                # Pour une image, inclure sa description et son chemin
+                metadata = result["metadata"]
+                path = metadata.get("path", "")
+                page_info = f" (page {metadata['page']})" if "page" in metadata else ""
+                source_info = f" de {metadata.get('filename', metadata.get('source', 'source inconnue'))}"
+
+                context_pieces.append(
+                    f"[Image {i + 1}{page_info}{source_info}] Description: {result['content']}"
+                )
+                sources.append(
+                    {
+                        "type": "image",
+                        "path": path,
+                        "description": result["content"],
+                        "metadata": metadata,
+                        "similarity": result["similarity"],
+                        "rerank_score": result.get("rerank_score", None),
+                    }
+                )
+            else:
+                # Pour du texte, inclure le contenu
+                metadata = result["metadata"]
+                content = result["content"]
+                source = metadata.get("source", "source inconnue")
+                page_info = f" (page {metadata['page']})" if "page" in metadata else ""
+
+                context_pieces.append(f"[Document {i + 1}{page_info}] {content}")
+                sources.append(
+                    {
+                        "type": "text",
+                        "content": content,
+                        "metadata": metadata,
+                        "similarity": result["similarity"],
+                        "rerank_score": result.get("rerank_score", None),
+                    }
+                )
+
+        # S'il n'y a pas de résultats, informer le LLM
+        if not context_pieces:
+            context = (
+                "Aucune information pertinente trouvée dans la base de connaissances."
+            )
+            print("⚠️ Aucun contexte pertinent trouvé pour la requête.")
+        else:
+            context = "\n\n".join(context_pieces)
+            print(
+                f"✅ {len(context_pieces)} éléments de contexte trouvés pour la requête."
+            )
+
+        # Charger l'image PIL si c'est un chemin
+        image_obj = image
+        if isinstance(image, str):
+            try:
+                image_obj = Image.open(image)
+            except Exception as e:
+                print(f"Erreur lors du chargement de l'image pour le LLM: {e}")
+                # Continuer sans image
+
+        # Si nous utilisons un modèle multimodal comme llava, nous pouvons passer l'image directement
+        # La requête inclura à la fois le texte et l'image
+        query_str = f"Requête: {text}"
+        if "llava" in self.llm.model.lower():
+            # Pour les modèles multimodaux, on peut passer l'image directement
+            # Note: cela nécessite une adaptation du modèle Ollama pour gérer les images
+            print(
+                "Utilisation d'un modèle multimodal, intégration directe de l'image..."
+            )
+            # Cette partie dépend de l'implémentation spécifique d'Ollama pour les images
+            # Pour l'instant, nous utilisons simplement le texte
+
+        # Formater le prompt
+        formatted_prompt = self.prompt_template.format(context=context, query=query_str)
+
+        print(f"Envoi de la requête au modèle LLM: {self.llm.model}")
+        # Appeler le LLM directement
+        answer = self.llm.invoke(formatted_prompt)
+        print("Réponse obtenue du LLM")
+
+        # Formater la réponse finale
+        return {
+            "answer": answer,
+            "sources": sources,
+            "query_text": text,
+            "query_image": str(image)
+            if isinstance(image, str)
+            else "Image fournie directement",
+            "query_type": "text_and_image",
+        }
+
 
 # Fonction pour migrer d'une base existante
 def migrate_from_original_rag(
