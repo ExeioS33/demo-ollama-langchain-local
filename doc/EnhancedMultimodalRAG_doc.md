@@ -12,7 +12,7 @@
 - Support GPU pour les calculs vectoriels (si disponible)
 - Compatibilité avec divers modèles LLM via Ollama
 - Format de réponse structuré avec sources et scores
-- Support pour requêtes textuelles et visuelles
+- Support pour requêtes textuelles, visuelles et combinées texte-image
 - Utilisation du modèle CLIP via transformers
 - Compatible avec LangChain Expression Language (LCEL)
 
@@ -136,6 +136,55 @@ response = rag.query("Quelle est l'architecture du système?",
 from PIL import Image
 image = Image.open("query_image.jpg")
 response = rag.query(image, top_k=3)
+```
+
+### `query_text_and_image(text: str, image: Image.Image, top_k: int = 5, filter_metadata: Optional[Dict] = None, use_reranking: bool = True) -> Dict`
+
+Interroge la base de connaissances avec une combinaison de texte et d'image, et génère une réponse.
+
+#### Paramètres
+
+| Paramètre | Type | Description |
+|-----------|------|-------------|
+| `text` | str | Requête textuelle |
+| `image` | Image.Image | Image pour la requête |
+| `top_k` | int | Nombre maximum de résultats à utiliser comme contexte |
+| `filter_metadata` | Optional[Dict] | Filtre à appliquer sur les métadonnées |
+| `use_reranking` | bool | Si True, utilise le reranking pour améliorer la pertinence |
+
+#### Retour
+
+| Type | Description |
+|------|-------------|
+| Dict | Dictionnaire contenant la réponse, la requête et les sources utilisées |
+
+#### Structure de la réponse
+
+La structure de la réponse est identique à celle de la méthode `query` :
+- `query` : La requête originale (texte + référence à l'image)
+- `answer` : La réponse générée par le LLM
+- `sources` : Liste des sources utilisées avec leurs métadonnées et scores
+- `time_taken` : Temps total d'exécution en secondes
+
+#### Exemple d'utilisation
+
+```python
+# Requête combinée texte-image
+from PIL import Image
+image = Image.open("query_image.jpg")
+response = rag.query_text_and_image(
+    text="Décris cette image et explique comment elle est liée à mon contenu",
+    image=image,
+    top_k=5
+)
+print(response["answer"])
+
+# Requête avec filtre sur les métadonnées
+response = rag.query_text_and_image(
+    text="Quelle est la relation entre cette image et les documents techniques?",
+    image=image,
+    filter_metadata={"type": "text"}
+)
 ```
 
 ### `migrate_from_chromadb(chroma_path: str, chroma_collection: str) -> Dict`
