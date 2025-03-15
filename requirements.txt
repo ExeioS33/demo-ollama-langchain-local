@@ -1,50 +1,41 @@
-# Versions compatibles pour LangChain avec Ollama (LCEL)
-langchain>=0.1.5
-langchain-core>=0.1.14
-langchain-community>=0.0.16
-langchain-ollama>=0.0.6
+# Versions compatibles pour LangChain avec Ollama
+langchain>=0.1.12
+langchain-core>=0.2.20,<0.3.0
+langchain-community>=0.0.29
+langchain-ollama>=0.1.0
 
 # LangChain dependencies
-pydantic>=2.0.0
+pydantic>=2.6.4
 pydantic-core>=2.16.3
 
-# Embeddings et recherche de similarité
-sentence-transformers>=2.4.0
-faiss-cpu>=1.10.0  # Utiliser faiss-gpu pour les environnements GPU
-chromadb>=0.4.0
+# Embeddings
+gpt4all>=2.0.0
+chromadb>=0.4.18
+sentence-transformers>=2.2.2
 
-# Vision models - Multimodal embeddings
-torch>=2.0.0
-transformers>=4.30.0  # Inclut CLIP et d'autres modèles multimodaux
-# clip a été supprimé car remplacé par transformers
+# Recherche de similarité améliorée
+faiss-cpu>=1.7.4  # Pour environnements CPU - principal backend pour la recherche vectorielle
+# annoy>=1.17.0   # Alternative légère à FAISS (nécessite un compilateur C++)
+cross-encoders>=0.0.4  # Pour le reranking avancé
 
-# Traitement d'images et PDFs
-pillow>=9.5.0
+# Image processing
+pillow>=10.0.0
 matplotlib>=3.7.0
-pymupdf>=1.22.0  # PyMuPDF pour le traitement des PDF
 requests>=2.31.0
 
-# Utilitaires essentiels
+# Multimodal RAG avec transformers
+torch>=2.0.0
+transformers>=4.30.0  # Inclut l'implémentation de CLIP
+pymupdf>=1.22.0       # PyMuPDF pour le traitement des PDF
 numpy>=1.24.0
-tqdm>=4.66.0
-ipykernel>=6.0.0
-pandas>=2.0.0
-jupyterlab>=4.0.0
-jupyter>=1.0.0
+tqdm>=4.65.0
 
-# API et serveurs
-fastapi>=0.100.0
-uvicorn>=0.22.0
-python-multipart>=0.0.6
-python-dotenv>=1.0.0
+# Utilitaires
+ipykernel
+pandas
+jupyter
 
 # Pour éviter les avertissements de dépendances
-orjson>=3.9.0
+orjson>=3.9.10
 tenacity>=8.2.3
-typing-extensions>=4.9.0
-openai>=1.1.0
-regex>=2022.1.18
-
-# Note concernant les packages nécessitant une compilation C++
-# Si vous rencontrez des problèmes avec les installations suivantes, utilisez 'make install-no-compile'
-# ou 'uv pip install --no-build-isolation faiss-cpu' pour FAISS sans dépendance de compilation 
+typing-extensions>=4.9.0 

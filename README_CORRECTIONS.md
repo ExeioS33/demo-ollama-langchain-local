@@ -74,14 +74,52 @@ Le fichier `requirements.txt` a été restructuré pour améliorer la clarté et
 - Organisation des dépendances en catégories logiques
 - Précision des versions minimales pour assurer la compatibilité
 
-### 4. Amélioration du Makefile
+### 4. Amélioration du Makefile pour l'environnement UV
 
-Le Makefile a été amélioré pour :
+Le Makefile a été complètement remanié pour utiliser correctement UV :
 
-- Utiliser explicitement `uv pip` au lieu de `pip`
-- Ajouter des vérifications plus complètes des dépendances
-- Améliorer les commandes d'installation pour éviter les problèmes de compilation
-- Vérifier explicitement la disponibilité de transformers et CLIP
+- Remplacement de `python3` par `uv run python` pour l'exécution des scripts
+- Ajout d'une variable `UV_RUN = uv run` pour exécuter les scripts Python
+- Utilisation de `uv pip` pour toutes les opérations d'installation
+- Modification des commandes de vérification pour utiliser `uv run -c "..."` au lieu de `python -c "..."`
+- Ajout de commandes de test spécifiques pour UV :
+  - `make create-test-script` : Crée un script de test pour vérifier l'installation
+  - `make test-installation` : Exécute le script de test
+
+Exemple de changements dans le Makefile :
+
+```makefile
+# Avant
+PYTHON = python3
+PIP = uv pip
+...
+check-faiss:
+	@$(PYTHON) -c "import faiss; print('✅ FAISS est correctement installé')" || \
+	(echo "❌ FAISS n'est pas installé correctement"; exit 1)
+
+# Après
+PYTHON = uv run python
+PIP = uv pip
+UV_RUN = uv run
+...
+check-deps:
+	@echo "Vérification des dépendances principales..."
+	@$(UV_RUN) -c "import faiss; print('✅ FAISS est correctement installé')" || \
+	(echo "❌ FAISS n'est pas installé correctement"; exit 1)
+	@$(UV_RUN) -c "from transformers import CLIPProcessor; print('✅ CLIP est disponible')"
+```
+
+### 5. Nouvelles commandes de test dans le Makefile
+
+Des commandes supplémentaires ont été ajoutées pour faciliter la vérification de l'installation :
+
+```bash
+# Créer un script de test pour vérifier l'installation
+make create-test-script
+
+# Exécuter le script de test avec UV
+make test-installation
+```
 
 ## Utilisation des fonctionnalités LCEL de LangChain
 
@@ -118,9 +156,9 @@ chain = (
 )
 ```
 
-## Vérification de l'installation
+## Vérification de l'installation avec UV
 
-Pour vérifier que les dépendances sont correctement installées :
+Pour vérifier que les dépendances sont correctement installées avec UV :
 
 ```bash
 make check-deps
@@ -131,9 +169,15 @@ Cette commande vérifie :
 - L'installation correcte de CLIP via transformers
 - La disponibilité du modèle CrossEncoder pour le reranking
 
-## Exécution de la démo
+Pour un test plus complet, utilisez :
 
-Pour exécuter une démo complète avec les corrections :
+```bash
+make test-installation
+```
+
+## Exécution de la démo avec UV
+
+Pour exécuter une démo complète avec les corrections et UV :
 
 ```bash
 make -f Makefile.enhanced demo
@@ -146,5 +190,6 @@ make -f Makefile.enhanced demo
 1. **Changement de l'import CLIP** : Remplacement de l'import direct par transformers
 2. **Mise à jour de DEFAULT_CLIP_MODEL** : "ViT-B/32" → "openai/clip-vit-base-patch32" pour compatibilité avec transformers
 3. **Remplacement des méthodes d'embedding** : Utilisation de l'API transformers au lieu de l'API native CLIP
-4. **Mise à jour du Makefile** : Remplacement de `check-faiss` par `check-deps` plus complet
-5. **Nettoyage de requirements.txt** : Suppression des dépendances conflictuelles et réorganisation 
+4. **Mise à jour complète du Makefile** : Remplacement de `python` par `uv run` pour toutes les commandes
+5. **Nettoyage de requirements.txt** : Suppression des dépendances conflictuelles et réorganisation
+6. **Commandes de test UV** : Ajout de commandes spécifiques pour tester l'installation avec UV 

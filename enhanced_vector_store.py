@@ -28,7 +28,7 @@ from transformers import CLIPProcessor, CLIPModel
 import fitz  # PyMuPDF
 
 # Constantes
-DEFAULT_CLIP_MODEL = "openai/clip-vit-base-patch32"
+DEFAULT_CLIP_MODEL = "ViT-B/32"
 
 
 class EnhancedVectorStore:
@@ -68,12 +68,21 @@ class EnhancedVectorStore:
         self.metadata_path = os.path.join(self.index_dir, "metadata.pkl")
         self.ids_path = os.path.join(self.index_dir, "ids.pkl")
 
-        # Chargement du modèle CLIP (mise à jour pour utiliser transformers)
+        # Chargement du modèle CLIP
         self.device = "cuda" if self.use_gpu else "cpu"
         print(f"Chargement du modèle CLIP {clip_model_name} sur {self.device}...")
-        self.clip_model = CLIPModel.from_pretrained(clip_model_name).to(self.device)
-        self.clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
-        # Mise à jour de la dimension d'embedding
+        # Convertit les noms de modèles anciennes versions vers les noms de transformers
+        if clip_model_name == "ViT-B/32":
+            transformers_model_name = "openai/clip-vit-base-patch32"
+        elif clip_model_name == "ViT-L/14":
+            transformers_model_name = "openai/clip-vit-large-patch14"
+        else:
+            transformers_model_name = clip_model_name
+
+        self.clip_model = CLIPModel.from_pretrained(transformers_model_name).to(
+            self.device
+        )
+        self.clip_processor = CLIPProcessor.from_pretrained(transformers_model_name)
         self.embedding_dim = self.clip_model.config.projection_dim
 
         # Chargement du modèle de reranking
@@ -188,9 +197,7 @@ class EnhancedVectorStore:
                 text=[text], return_tensors="pt", padding=True, truncation=True
             )
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
             text_features = self.clip_model.get_text_features(**inputs)
-            # Normalisation L2 pour la similarité cosinus
             embedding = text_features / text_features.norm(dim=1, keepdim=True)
 
         return embedding.cpu().numpy()[0]
@@ -213,13 +220,11 @@ class EnhancedVectorStore:
                 print(f"Erreur lors du chargement de l'image {image}: {e}")
                 return None
 
-        # Prétraiter l'image et générer l'embedding avec transformers
+        # Prétraiter l'image et générer l'embedding
         with torch.no_grad():
             inputs = self.clip_processor(images=image, return_tensors="pt")
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
             image_features = self.clip_model.get_image_features(**inputs)
-            # Normalisation L2 pour la similarité cosinus
             embedding = image_features / image_features.norm(dim=1, keepdim=True)
 
         return embedding.cpu().numpy()[0]

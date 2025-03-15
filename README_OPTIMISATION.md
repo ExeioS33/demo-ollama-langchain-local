@@ -37,6 +37,24 @@ Une fonction de migration permet de convertir les collections ChromaDB existante
 python enhanced_multimodal_rag_demo.py --migrate --chroma-path chroma_db --chroma-collection multimodal_collection
 ```
 
+### 5. Utilisation de CLIP via Transformers
+
+Le système utilise désormais l'implémentation de CLIP de la bibliothèque Transformers de Hugging Face au lieu du package CLIP original:
+
+- Meilleure maintenance et compatibilité
+- Intégration plus facile avec l'écosystème Hugging Face
+- Support pour plus de modèles CLIP pré-entraînés
+- Conversion automatique des noms de modèles (ex: "ViT-B/32" → "openai/clip-vit-base-patch32")
+
+### 6. Compatibilité avec UV
+
+Le système est maintenant compatible avec l'environnement UV, un gestionnaire de paquets Python ultra-rapide:
+
+- Utilisation de `uv run` pour exécuter les scripts Python
+- Utilisation de `uv pip` pour installer les dépendances
+- Commandes de vérification adaptées à l'environnement UV
+- Meilleure gestion des dépendances qui nécessitent une compilation
+
 ## Architecture
 
 Le système optimisé comprend trois composants principaux:
@@ -60,36 +78,63 @@ Le système optimisé comprend trois composants principaux:
 Les nouvelles dépendances ont été ajoutées dans le fichier `requirements.txt`:
 
 ```bash
+# Avec pip standard
 pip install -r requirements.txt
+
+# Avec UV (recommandé pour de meilleures performances)
+uv pip install -r requirements.txt
 ```
 
 Principales nouvelles dépendances:
 - faiss-cpu (ou faiss-gpu)
-- cross-encoders
-- annoy (optionnel, pour certains cas d'usage)
+- transformers (pour CLIP)
+- sentence-transformers (pour CrossEncoder)
+- cross-encoders (optionnel, pour le reranking)
+
+### Installation avec le Makefile
+
+Un Makefile amélioré est fourni pour faciliter l'installation et l'utilisation:
+
+```bash
+# Installation standard
+make -f Makefile.enhanced install
+
+# Installation sans packages nécessitant une compilation
+make -f Makefile.enhanced install-no-compile
+
+# Vérifier les dépendances
+make -f Makefile.enhanced check-deps
+
+# Afficher les informations de configuration
+make -f Makefile.enhanced config-info
+```
 
 ## Utilisation
 
 ### Script de démonstration amélioré
 
 ```bash
-# Ajouter un document au système
+# Avec Python standard
 python enhanced_multimodal_rag_demo.py --add-document path/to/document.pdf
 
+# Avec UV
+uv run enhanced_multimodal_rag_demo.py --add-document path/to/document.pdf
+
+# Avec le Makefile (utilise UV automatiquement)
+make -f Makefile.enhanced add-document
+```
+
+Autres commandes:
+
+```bash
 # Effectuer une requête textuelle
-python enhanced_multimodal_rag_demo.py --query "Que contient ce document?"
+make -f Makefile.enhanced query
 
 # Effectuer une requête par image
-python enhanced_multimodal_rag_demo.py --image-query path/to/query_image.jpg
+make -f Makefile.enhanced image-query
 
-# Utiliser le GPU pour les calculs (si disponible)
-python enhanced_multimodal_rag_demo.py --use-gpu --query "Ma requête"
-
-# Désactiver le reranking pour cette requête
-python enhanced_multimodal_rag_demo.py --no-reranking --query "Ma requête"
-
-# Modifier le seuil de similarité
-python enhanced_multimodal_rag_demo.py --similarity-threshold 0.3 --query "Ma requête"
+# Exécuter une démo complète
+make -f Makefile.enhanced demo
 ```
 
 ### Utilisation dans votre code
@@ -130,6 +175,8 @@ print(results["answer"])
 | Précision      | Bonne            | Excellente       |
 | Support GPU    | Non              | Oui              |
 | Migration      | N/A              | Oui              |
+| Embeddings     | CLIP (package original) | CLIP via Transformers |
+| Gestionnaire de paquets | pip | pip ou UV |
 
 ## Utilisation avancée
 
@@ -147,6 +194,20 @@ rag = EnhancedMultimodalRAG(
 rag = EnhancedMultimodalRAG(
     use_gpu=True,  # Crucial pour les grandes collections
     persist_directory="faiss_index_large"
+)
+```
+
+### Utilisation avec différents modèles CLIP
+
+```python
+# Avec un modèle CLIP plus grand (meilleure qualité, plus lent)
+rag = EnhancedMultimodalRAG(
+    clip_model_name="openai/clip-vit-large-patch14"
+)
+
+# Avec un modèle CLIP plus petit (plus rapide, qualité moindre)
+rag = EnhancedMultimodalRAG(
+    clip_model_name="openai/clip-vit-base-patch16"
 )
 ```
 
