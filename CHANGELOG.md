@@ -35,4 +35,27 @@
 ### Optimisations
 - Normalisation L2 des embeddings
 - Fonctionnement possible sur CPU ou GPU
-- Stockage des métadonnées enrichies pour une meilleure contextualisation 
+- Stockage des métadonnées enrichies pour une meilleure contextualisation
+
+## [Unreleased]
+
+### Optimisation de la recherche de similarité (branche: similarity_optimization)
+
+#### Ajout
+- Nouveau module `enhanced_vector_store.py` avec implémentation FAISS pour la recherche approximative
+- Nouveau module `enhanced_multimodal_rag.py` optimisé pour la précision des résultats
+- Script de démonstration amélioré `enhanced_multimodal_rag_demo.py`
+- Fonction de migration pour convertir les collections ChromaDB existantes vers FAISS
+- Support GPU pour accélérer les calculs vectoriels (si disponible)
+- Documentation détaillée des optimisations dans `README_OPTIMISATION.md`
+
+#### Changements
+- Remplacement de ChromaDB par FAISS pour la recherche de similarité
+- Intégration de cross-encoders pour le reranking avancé des résultats
+- Amélioration de la gestion des seuils de similarité
+- Options de configuration étendues (GPU, modèle de reranking, etc.)
+
+#### Performance
+- Recherche plus rapide, particulièrement sur les grandes collections
+- Précision des résultats significativement améliorée
+- Meilleure mise à l'échelle pour les grands volumes de données 
