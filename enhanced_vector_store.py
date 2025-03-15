@@ -24,6 +24,9 @@ from tqdm import tqdm
 from sentence_transformers import CrossEncoder
 from transformers import CLIPProcessor, CLIPModel
 
+# Import de la classe EnhancedEmbedder
+from enhanced_embedder import EnhancedEmbedder
+
 # Pour traitement des PDFs
 import fitz  # PyMuPDF
 
@@ -49,28 +52,35 @@ class EnhancedVectorStore:
         Initialise le magasin vectoriel amélioré.
 
         Args:
-            collection_name (str): Nom de la collection
-            persist_directory (str): Répertoire où stocker l'index FAISS
-            use_gpu (bool): Si True, utilise GPU pour FAISS (si disponible)
+            collection_name (str): Nom de la collection à utiliser
+            persist_directory (str): Répertoire où stocker la base de données
+            use_gpu (bool): Utiliser le GPU pour FAISS si disponible
             clip_model_name (str): Nom du modèle CLIP à utiliser
-            reranking_model (str): Modèle de reranking à utiliser
+            reranking_model (str): Nom du modèle CrossEncoder à utiliser pour le reranking
         """
         self.collection_name = collection_name
         self.persist_directory = persist_directory
-        self.use_gpu = use_gpu and torch.cuda.is_available()
+        self.use_gpu = use_gpu
 
-        # Créer le répertoire pour stocker l'index s'il n'existe pas
-        self.index_dir = os.path.join(persist_directory, collection_name)
-        os.makedirs(self.index_dir, exist_ok=True)
+        # Créer le répertoire de persistance s'il n'existe pas
+        os.makedirs(self.persist_directory, exist_ok=True)
 
-        # Chemins vers les fichiers
-        self.index_path = os.path.join(self.index_dir, "faiss_index.bin")
-        self.metadata_path = os.path.join(self.index_dir, "metadata.pkl")
-        self.ids_path = os.path.join(self.index_dir, "ids.pkl")
+        # Définir les chemins de stockage
+        collection_dir = os.path.join(self.persist_directory, self.collection_name)
+        os.makedirs(collection_dir, exist_ok=True)
+        self.index_path = os.path.join(collection_dir, "faiss_index.bin")
+        self.metadata_path = os.path.join(collection_dir, "metadata.pkl")
+        self.ids_path = os.path.join(collection_dir, "ids.pkl")
 
-        # Chargement du modèle CLIP
-        self.device = "cuda" if self.use_gpu else "cpu"
-        print(f"Chargement du modèle CLIP {clip_model_name} sur {self.device}...")
+        # Déterminer si on utilise GPU pour FAISS
+        self.device = "cuda" if use_gpu and torch.cuda.is_available() else "cpu"
+        self.use_gpu = self.device == "cuda"
+
+        if self.use_gpu:
+            print(f"Utilisation du GPU pour FAISS ({torch.cuda.get_device_name(0)})")
+        else:
+            print("Utilisation du CPU pour FAISS")
+
         # Convertit les noms de modèles anciennes versions vers les noms de transformers
         if clip_model_name == "ViT-B/32":
             transformers_model_name = "openai/clip-vit-base-patch32"
@@ -79,11 +89,11 @@ class EnhancedVectorStore:
         else:
             transformers_model_name = clip_model_name
 
-        self.clip_model = CLIPModel.from_pretrained(transformers_model_name).to(
-            self.device
+        # Initialisation de l'embedder
+        self.embedder = EnhancedEmbedder(
+            model_name=transformers_model_name, use_gpu=use_gpu
         )
-        self.clip_processor = CLIPProcessor.from_pretrained(transformers_model_name)
-        self.embedding_dim = self.clip_model.config.projection_dim
+        self.embedding_dim = self.embedder.get_embedding_dimension()
 
         # Chargement du modèle de reranking
         if reranking_model:
@@ -184,27 +194,23 @@ class EnhancedVectorStore:
 
     def _get_text_embedding(self, text: str) -> np.ndarray:
         """
-        Génère un embedding pour du texte avec CLIP.
+        Génère un embedding pour un texte avec CLIP via EnhancedEmbedder.
 
         Args:
-            text (str): Texte à encoder
+            text (str): Texte à convertir en embedding
 
         Returns:
             np.ndarray: Vecteur d'embedding normalisé
         """
-        with torch.no_grad():
-            inputs = self.clip_processor(
-                text=[text], return_tensors="pt", padding=True, truncation=True
-            )
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-            text_features = self.clip_model.get_text_features(**inputs)
-            embedding = text_features / text_features.norm(dim=1, keepdim=True)
-
-        return embedding.cpu().numpy()[0]
+        try:
+            return self.embedder.embed_text(text)
+        except Exception as e:
+            print(f"Erreur lors de la génération de l'embedding du texte: {e}")
+            return None
 
     def _get_image_embedding(self, image: Union[str, Image.Image]) -> np.ndarray:
         """
-        Génère un embedding pour une image avec CLIP.
+        Génère un embedding pour une image avec CLIP via EnhancedEmbedder.
 
         Args:
             image (Union[str, Image.Image]): Chemin vers l'image ou objet PIL Image
@@ -220,14 +226,38 @@ class EnhancedVectorStore:
                 print(f"Erreur lors du chargement de l'image {image}: {e}")
                 return None
 
-        # Prétraiter l'image et générer l'embedding
-        with torch.no_grad():
-            inputs = self.clip_processor(images=image, return_tensors="pt")
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-            image_features = self.clip_model.get_image_features(**inputs)
-            embedding = image_features / image_features.norm(dim=1, keepdim=True)
+        try:
+            return self.embedder.embed_image(image)
+        except Exception as e:
+            print(f"Erreur lors de la génération de l'embedding de l'image: {e}")
+            return None
 
-        return embedding.cpu().numpy()[0]
+    def _get_combined_embedding(
+        self, text: str, image: Union[str, Image.Image]
+    ) -> np.ndarray:
+        """
+        Génère un embedding combiné pour un texte et une image.
+
+        Args:
+            text (str): Texte à combiner
+            image (Union[str, Image.Image]): Chemin vers l'image ou objet PIL Image
+
+        Returns:
+            np.ndarray: Vecteur d'embedding combiné normalisé
+        """
+        # Charger l'image si c'est un chemin
+        if isinstance(image, str):
+            try:
+                image = Image.open(image).convert("RGB")
+            except Exception as e:
+                print(f"Erreur lors du chargement de l'image {image}: {e}")
+                return None
+
+        try:
+            return self.embedder.embed_text_and_image(text, image)
+        except Exception as e:
+            print(f"Erreur lors de la génération de l'embedding combiné: {e}")
+            return None
 
     def add_texts(
         self, texts: List[str], metadatas: Optional[List[Dict]] = None
@@ -526,6 +556,114 @@ class EnhancedVectorStore:
 
             for result in results:
                 pairs.append([query_text, result["content"]])
+
+            # Obtenir les scores de reranking
+            rerank_scores = self.reranker.predict(pairs)
+
+            # Appliquer les scores
+            for i, score in enumerate(rerank_scores):
+                results[i]["rerank_score"] = float(score)
+
+            # Réordonner les résultats par score de reranking
+            results = sorted(results, key=lambda x: x["rerank_score"], reverse=True)
+
+        # Retourner les résultats limités à top_k
+        return results[:top_k]
+
+    def query_text_and_image(
+        self,
+        text: str,
+        image: Union[str, Image.Image],
+        top_k: int = 5,
+        filter_metadata: Optional[Dict] = None,
+        use_reranking: bool = True,
+    ) -> List[Dict]:
+        """
+        Interroge l'index avec une combinaison de texte et d'image.
+
+        Cette méthode permet de rechercher des documents qui correspondent
+        sémantiquement à la fois au texte et à l'image fournis, en utilisant
+        un embedding combiné pour la recherche.
+
+        Args:
+            text (str): Texte de la requête
+            image (Union[str, Image.Image]): Image de la requête (chemin ou objet PIL)
+            top_k (int): Nombre maximum de résultats à retourner
+            filter_metadata (Optional[Dict]): Filtre à appliquer sur les métadonnées
+            use_reranking (bool): Si True, utilise le reranking pour améliorer les résultats
+
+        Returns:
+            List[Dict]: Liste de résultats avec contenu, métadonnées et scores
+        """
+        # Vérifier que l'index n'est pas vide
+        if len(self.ids) == 0:
+            print("L'index est vide, aucun résultat disponible")
+            return []
+
+        # Augmenter top_k pour le reranking
+        faiss_top_k = top_k * 3 if use_reranking and self.reranker else top_k
+
+        # Générer l'embedding combiné
+        print(f"Recherche combinée texte-image: {text}")
+        query_embedding = self._get_combined_embedding(text, image)
+
+        if query_embedding is None:
+            print("Impossible de générer un embedding combiné pour la requête")
+            return []
+
+        # Préparer l'embedding pour la recherche
+        query_embedding = np.array([query_embedding]).astype("float32")
+
+        # Effectuer la recherche dans FAISS
+        distances, indices = self.index.search(
+            query_embedding, min(faiss_top_k, len(self.ids))
+        )
+
+        # Convertir distances à scores de similarité
+        similarities = distances[0]
+        indices = indices[0]
+
+        # Préparer les résultats
+        results = []
+
+        for idx, similarity in zip(indices, similarities):
+            # Obtenir les métadonnées
+            meta_entry = self.metadata[idx]
+
+            # Appliquer le filtre des métadonnées si spécifié
+            if filter_metadata:
+                skip = False
+                for key, value in filter_metadata.items():
+                    if (
+                        key not in meta_entry["metadata"]
+                        or meta_entry["metadata"][key] != value
+                    ):
+                        skip = True
+                        break
+                if skip:
+                    continue
+
+            # Ajouter aux résultats
+            results.append(
+                {
+                    "id": meta_entry["id"],
+                    "content": meta_entry["content"],
+                    "metadata": meta_entry["metadata"],
+                    "is_image": meta_entry["is_image"],
+                    "similarity": float(similarity),
+                    "query_type": "text_and_image",
+                }
+            )
+
+        # Appliquer le reranking si demandé et disponible
+        if use_reranking and self.reranker and len(results) > 1:
+            print("Application du reranking...")
+            pairs = []
+
+            # Pour le reranking, on utilise uniquement le texte de la requête
+            # car le modèle CrossEncoder ne supporte pas les images
+            for result in results:
+                pairs.append([text, result["content"]])
 
             # Obtenir les scores de reranking
             rerank_scores = self.reranker.predict(pairs)
