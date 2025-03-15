@@ -99,6 +99,12 @@ def parser_arguments():
     )
 
     parser.add_argument(
+        "--combined-query",
+        action="store_true",
+        help="Effectuer une requête combinée texte et image (nécessite --query et --image-query)",
+    )
+
+    parser.add_argument(
         "--top-k",
         type=int,
         default=5,
@@ -219,7 +225,7 @@ def main():
         print(f"Document ajouté avec succès! {len(doc_ids)} IDs générés.")
 
     # Traiter une requête textuelle
-    if args.query:
+    if args.query and not (args.combined_query and args.image_query):
         print_divider(f"Requête: {args.query}")
         results = rag_system.query(
             query=args.query, top_k=args.top_k, use_reranking=not args.no_reranking
@@ -232,12 +238,32 @@ def main():
             print(f"Erreur: L'image {args.image_query} n'existe pas")
             return
 
-        print_divider(f"Requête par image: {args.image_query}")
-        image = Image.open(args.image_query).convert("RGB")
-        results = rag_system.query(
-            query=image, top_k=args.top_k, use_reranking=not args.no_reranking
-        )
-        print_results(results)
+        # Si c'est une requête combinée texte-image
+        if args.combined_query and args.query:
+            print_divider(
+                f"Requête combinée texte-image: '{args.query}' + {args.image_query}"
+            )
+            image = Image.open(args.image_query).convert("RGB")
+            results = rag_system.query_text_and_image(
+                text=args.query,
+                image=image,
+                top_k=args.top_k,
+                use_reranking=not args.no_reranking,
+            )
+            print_results(results)
+        # Sinon, c'est une requête par image uniquement
+        elif not args.combined_query:
+            print_divider(f"Requête par image: {args.image_query}")
+            image = Image.open(args.image_query).convert("RGB")
+            results = rag_system.query(
+                query=image, top_k=args.top_k, use_reranking=not args.no_reranking
+            )
+            print_results(results)
+        else:
+            print(
+                "Erreur: Pour une requête combinée, vous devez spécifier à la fois --query et --image-query"
+            )
+            return
 
     # Si aucune action spécifiée, afficher un exemple d'utilisation
     if not args.add_document and not args.query and not args.image_query:
@@ -255,7 +281,13 @@ def main():
         )
         print("\n  4. Effectuer une requête par image:")
         print(f"     python {__file__} --image-query chemin/vers/image.jpg")
-        print("\n  5. Migrer une collection ChromaDB existante:")
+
+        print("\n  5. Effectuer une requête combinée texte-image:")
+        print(
+            f'     python {__file__} --query "Décris cette image" --image-query chemin/vers/image.jpg --combined-query'
+        )
+
+        print("\n  6. Migrer une collection ChromaDB existante:")
         print(
             f"     python {__file__} --migrate --chroma-path chroma_db --chroma-collection multimodal_collection"
         )
