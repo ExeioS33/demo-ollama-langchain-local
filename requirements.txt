@@ -1,4 +1,4 @@
-# Versions compatibles pour LangChain avec Ollama
+# Versions compatibles pour LangChain avec Ollama (LCEL)
 langchain>=0.1.5
 langchain-core>=0.1.14
 langchain-community>=0.0.16
@@ -8,46 +8,43 @@ langchain-ollama>=0.0.6
 pydantic>=2.0.0
 pydantic-core>=2.16.3
 
-# Embeddings
-gpt4all>=2.0.0
+# Embeddings et recherche de similarité
+sentence-transformers>=2.4.0
+faiss-cpu>=1.10.0  # Utiliser faiss-gpu pour les environnements GPU
 chromadb>=0.4.0
-sentence-transformers>=2.2.2
 
-# Image processing
+# Vision models - Multimodal embeddings
+torch>=2.0.0
+transformers>=4.30.0  # Inclut CLIP et d'autres modèles multimodaux
+# clip a été supprimé car remplacé par transformers
+
+# Traitement d'images et PDFs
 pillow>=9.5.0
 matplotlib>=3.7.0
+pymupdf>=1.22.0  # PyMuPDF pour le traitement des PDF
 requests>=2.31.0
 
-# Multimodal RAG avec CLIP
-torch>=2.0.0
-transformers>=4.30.0
-clip>=0.2.0
-pymupdf>=1.22.0  # PyMuPDF pour le traitement des PDF
+# Utilitaires essentiels
 numpy>=1.24.0
 tqdm>=4.66.0
-
-# Utilitaires
 ipykernel>=6.0.0
-numpy
 pandas>=2.0.0
 jupyterlab>=4.0.0
 jupyter>=1.0.0
 
-# Pour éviter les avertissements de dépendances
-orjson>=3.9.0
-tenacity>=8.2.3
-typing-extensions>=4.9.0
-
-# Pour le RAG multimodal
+# API et serveurs
 fastapi>=0.100.0
 uvicorn>=0.22.0
 python-multipart>=0.0.6
 python-dotenv>=1.0.0
 
-# Pour les warnings de dépendances
+# Pour éviter les avertissements de dépendances
+orjson>=3.9.0
+tenacity>=8.2.3
+typing-extensions>=4.9.0
 openai>=1.1.0
 regex>=2022.1.18
 
-# Recherche de similarité améliorée
-faiss-cpu>=1.7.4  # Utiliser faiss-gpu pour les environnements GPU
-annoy>=1.17.0     # Alternative légère à FAISS pour certains cas d'usage 
+# Note concernant les packages nécessitant une compilation C++
+# Si vous rencontrez des problèmes avec les installations suivantes, utilisez 'make install-no-compile'
+# ou 'uv pip install --no-build-isolation faiss-cpu' pour FAISS sans dépendance de compilation 

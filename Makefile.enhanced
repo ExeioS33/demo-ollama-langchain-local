@@ -7,7 +7,8 @@
 
 # Configuration
 PYTHON = python3
-MODEL = qwen2.5:3b
+PIP = uv pip
+MODEL = llava:latest
 DB_PATH = ./enhanced_vector_store
 COLLECTION = enhanced_multimodal_collection
 CHROMA_PATH = ./chroma_db
@@ -16,10 +17,70 @@ GPU = false
 SIMILARITY = 0.2
 RERANKER = cross-encoder/ms-marco-MiniLM-L-6-v2
 
+# Vérifier si nous sommes dans un environnement virtuel
+VENV_CHECK := $(shell $(PYTHON) -c "import sys; print(hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix))" 2>/dev/null)
+
+# Vérifier si les compilateurs nécessaires sont disponibles
+HAS_GCC := $(shell which g++ >/dev/null 2>&1 && echo true || echo false)
+HAS_CLANG := $(shell which clang++ >/dev/null 2>&1 && echo true || echo false)
+
 # Installation des dépendances
 install:
-	pip install -r requirements.txt
+	@echo "Installation des dépendances..."
+	@echo "Environnement virtuel actif: $(VENV_CHECK)"
+	@if [ "$(VENV_CHECK)" != "True" ]; then \
+		echo "⚠️ Aucun environnement virtuel n'est actif! Il est recommandé d'en activer un."; \
+		read -p "Continuer quand même? (y/n) " choice; \
+		if [ "$$choice" != "y" ]; then \
+			echo "Installation annulée."; \
+			exit 1; \
+		fi; \
+	fi
+	@echo "Vérification des outils de compilation..."
+	@if [ "$(HAS_GCC)" = "false" ] && [ "$(HAS_CLANG)" = "false" ]; then \
+		echo "⚠️ Aucun compilateur C++ (g++ ou clang++) n'a été trouvé."; \
+		echo "  Les packages comme FAISS nécessitent un compilateur pour être installés."; \
+		echo "  Vous pouvez installer les outils de compilation avec:"; \
+		echo "    Ubuntu/Debian: sudo apt install build-essential"; \
+		echo "    CentOS/RHEL: sudo yum groupinstall 'Development Tools'"; \
+		echo "    Fedora: sudo dnf groupinstall 'Development Tools'"; \
+		echo "    macOS: xcode-select --install"; \
+		echo "  OU utiliser l'option d'installation sans packages nécessitant une compilation:"; \
+		echo "    make install-no-compile"; \
+		read -p "Essayer d'installer quand même? (y/n) " choice; \
+		if [ "$$choice" != "y" ]; then \
+			echo "Installation annulée."; \
+			exit 1; \
+		fi; \
+	fi
+	@echo "Installation des dépendances avec uv..."
+	$(PIP) install -r requirements.txt || (echo "⚠️ Erreur lors de l'installation; essayez 'make install-no-compile'"; exit 1)
 	@echo "✅ Dépendances installées"
+	@echo "Vérification de transformers et CLIP..."
+	@$(PYTHON) -c "from transformers import CLIPProcessor, CLIPModel; print('✅ CLIP via transformers est correctement installé')" || echo "⚠️ Problème avec l'installation de transformers/CLIP"
+
+# Installation sans packages nécessitant une compilation
+install-no-compile:
+	@echo "Installation des dépendances sans packages nécessitant une compilation..."
+	$(PIP) install torch transformers sentence-transformers
+	$(PIP) install langchain langchain-core langchain-community langchain-ollama
+	$(PIP) install --no-build-isolation faiss-cpu
+	$(PIP) install pydantic pillow matplotlib pymupdf requests numpy tqdm
+	$(PIP) install -r requirements.txt --no-deps
+	@echo "✅ Dépendances essentielles installées (sans compilation)"
+
+# Vérifier que faiss et transformers sont bien installés
+check-deps:
+	@echo "Vérification des dépendances principales..."
+	@$(PYTHON) -c "import faiss; print('✅ FAISS est correctement installé (version', faiss.__version__, ')')" || \
+	(echo "❌ FAISS n'est pas installé correctement. Essayez:"; \
+	 echo "$(PIP) install faiss-cpu --no-build-isolation"; exit 1)
+	@$(PYTHON) -c "from transformers import CLIPProcessor, CLIPModel; print('✅ CLIP via transformers est correctement installé')" || \
+	(echo "❌ CLIP n'est pas installé correctement. Essayez:"; \
+	 echo "$(PIP) install transformers"; exit 1)
+	@$(PYTHON) -c "from sentence_transformers import CrossEncoder; print('✅ CrossEncoder est disponible pour le reranking')" || \
+	(echo "⚠️ CrossEncoder n'est pas disponible. Le reranking sera désactivé."; \
+	 echo "Pour l'installer: $(PIP) install sentence-transformers")
 
 # Vérifier si Ollama est en cours d'exécution
 check-ollama:
@@ -39,17 +100,17 @@ download-models:
 	@echo "✅ Modèles téléchargés"
 
 # Réinitialiser la base de données FAISS
-reset-db:
+reset-db: check-deps
 	$(PYTHON) enhanced_multimodal_rag_demo.py --reset --db-path $(DB_PATH) --collection $(COLLECTION) --model $(MODEL)
 	@echo "✅ Base de données FAISS réinitialisée"
 
 # Migrer depuis une base ChromaDB existante
-migrate:
+migrate: check-deps
 	$(PYTHON) enhanced_multimodal_rag_demo.py --migrate --chroma-path $(CHROMA_PATH) --chroma-collection $(CHROMA_COLLECTION) --db-path $(DB_PATH) --model $(MODEL) $(if $(filter true,$(GPU)),--use-gpu,)
 	@echo "✅ Migration depuis ChromaDB vers FAISS terminée"
 
 # Ajouter un document (auto-détection du type)
-add-document: check-ollama
+add-document: check-deps
 	@read -p "Chemin du document (PDF, image, texte): " path; \
 	read -p "Description (optionnelle, pour les images): " desc; \
 	if [ -z "$$desc" ]; then \
@@ -59,17 +120,17 @@ add-document: check-ollama
 	fi
 
 # Faire une requête textuelle
-query: check-ollama
+query: check-ollama check-deps
 	@read -p "Votre question: " question; \
 	$(PYTHON) enhanced_multimodal_rag_demo.py --query "$$question" --model $(MODEL) --db-path $(DB_PATH) --collection $(COLLECTION) $(if $(filter true,$(GPU)),--use-gpu,) --similarity-threshold $(SIMILARITY) --reranker $(RERANKER)
 
 # Faire une requête avec une image
-image-query: check-ollama
+image-query: check-ollama check-deps
 	@read -p "Chemin de l'image de requête: " path; \
 	$(PYTHON) enhanced_multimodal_rag_demo.py --image-query $$path --model $(MODEL) --db-path $(DB_PATH) --collection $(COLLECTION) $(if $(filter true,$(GPU)),--use-gpu,) --similarity-threshold $(SIMILARITY) --reranker $(RERANKER)
 
 # Faire une requête sans reranking (pour comparer)
-query-no-rerank: check-ollama
+query-no-rerank: check-ollama check-deps
 	@read -p "Votre question: " question; \
 	$(PYTHON) enhanced_multimodal_rag_demo.py --query "$$question" --model $(MODEL) --db-path $(DB_PATH) --collection $(COLLECTION) $(if $(filter true,$(GPU)),--use-gpu,) --similarity-threshold $(SIMILARITY) --no-reranking
 
@@ -114,17 +175,44 @@ config-info:
 	@echo "  Utilisation GPU: $(GPU)"
 	@echo "  Seuil de similarité: $(SIMILARITY)"
 	@echo "  Modèle de reranking: $(RERANKER)"
+	@echo ""
+	@echo "Environnement:"
+	@echo "  Python: $(shell $(PYTHON) --version 2>&1)"
+	@if [ "$(VENV_CHECK)" = "True" ]; then \
+		echo "  Environnement virtuel: Actif"; \
+	else \
+		echo "  Environnement virtuel: Inactif"; \
+	fi
+	@echo "  Compilateur C++: $(if $(filter true,$(HAS_GCC)),GCC disponible,$(if $(filter true,$(HAS_CLANG)),Clang disponible,Non disponible))"
+	@echo "  FAISS: $(shell $(PYTHON) -c "import faiss; print(faiss.__version__)" 2>/dev/null || echo "Non installé")"
+	@echo "  Transformers: $(shell $(PYTHON) -c "import transformers; print(transformers.__version__)" 2>/dev/null || echo "Non installé")"
+	@echo "  Torch: $(shell $(PYTHON) -c "import torch; print(torch.__version__)" 2>/dev/null || echo "Non installé")"
+	@echo "  CUDA disponible: $(shell $(PYTHON) -c "import torch; print(torch.cuda.is_available())" 2>/dev/null || echo "Non installé")"
 
 # Compare performance (ancienne vs nouvelle implémentation)
-compare-performance: check-ollama
+compare-performance: check-ollama check-deps
 	@read -p "Votre question pour la comparaison: " question; \
 	echo "\n=== PERFORMANCE AVEC CHROMADB (ORIGINAL) ==="; \
 	time $(PYTHON) multimodal_rag_demo.py --query "$$question" --model $(MODEL) --db_path $(CHROMA_PATH) --collection $(CHROMA_COLLECTION); \
 	echo "\n=== PERFORMANCE AVEC FAISS (AMÉLIORÉ) ==="; \
 	time $(PYTHON) enhanced_multimodal_rag_demo.py --query "$$question" --model $(MODEL) --db-path $(DB_PATH) --collection $(COLLECTION) $(if $(filter true,$(GPU)),--use-gpu,)
 
+# Installer les dépendances système (pour Ubuntu/Debian)
+install-system-deps-debian:
+	@echo "Installation des dépendances système nécessaires (Ubuntu/Debian)..."
+	sudo apt update
+	sudo apt install -y build-essential python3-dev
+	@echo "✅ Dépendances système installées"
+
+# Installer les dépendances système (pour CentOS/RHEL/Fedora)
+install-system-deps-redhat:
+	@echo "Installation des dépendances système nécessaires (CentOS/RHEL/Fedora)..."
+	sudo $(if command -v dnf >/dev/null 2>&1; then echo "dnf"; else echo "yum"; fi) groupinstall -y "Development Tools"
+	sudo $(if command -v dnf >/dev/null 2>&1; then echo "dnf"; else echo "yum"; fi) install -y python3-devel
+	@echo "✅ Dépendances système installées"
+
 # Démo complète
-demo: check-ollama
+demo: check-deps
 	@echo "\n======= DÉMO DU SYSTÈME RAG MULTIMODAL AMÉLIORÉ =======\n"
 	@echo "Configuration: Model=$(MODEL), GPU=$(GPU), Similarité=$(SIMILARITY)"
 	@echo "\n1. Ajout d'un document texte de test..."
@@ -148,6 +236,10 @@ demo: check-ollama
 help:
 	@echo "Commandes disponibles pour le système RAG multimodal amélioré:"
 	@echo "  make install             : Installer les dépendances"
+	@echo "  make install-no-compile  : Installer les dépendances sans compilation"
+	@echo "  make check-deps          : Vérifier que les dépendances principales sont installées"
+	@echo "  make install-system-deps-debian : Installer les dépendances système (Ubuntu/Debian)"
+	@echo "  make install-system-deps-redhat : Installer les dépendances système (CentOS/RHEL/Fedora)"
 	@echo "  make start-ollama        : Démarrer Ollama en arrière-plan"
 	@echo "  make download-models     : Télécharger les modèles nécessaires"
 	@echo "  make reset-db            : Réinitialiser la base de données FAISS"
@@ -181,4 +273,4 @@ help:
 -include .similarity_config
 -include .reranker_config
 
-.PHONY: install check-ollama start-ollama download-models reset-db migrate add-document query image-query query-no-rerank set-model toggle-gpu set-similarity set-reranker config-info compare-performance demo help 
+.PHONY: install install-no-compile check-deps check-ollama start-ollama download-models reset-db migrate add-document query image-query query-no-rerank set-model toggle-gpu set-similarity set-reranker config-info compare-performance install-system-deps-debian install-system-deps-redhat demo help 

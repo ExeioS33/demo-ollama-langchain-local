@@ -22,14 +22,13 @@ import faiss
 import chromadb
 from tqdm import tqdm
 from sentence_transformers import CrossEncoder
-from clip import clip
-from clip.model import CLIP
+from transformers import CLIPProcessor, CLIPModel
 
 # Pour traitement des PDFs
 import fitz  # PyMuPDF
 
 # Constantes
-DEFAULT_CLIP_MODEL = "ViT-B/32"
+DEFAULT_CLIP_MODEL = "openai/clip-vit-base-patch32"
 
 
 class EnhancedVectorStore:
@@ -69,13 +68,13 @@ class EnhancedVectorStore:
         self.metadata_path = os.path.join(self.index_dir, "metadata.pkl")
         self.ids_path = os.path.join(self.index_dir, "ids.pkl")
 
-        # Chargement du modèle CLIP
+        # Chargement du modèle CLIP (mise à jour pour utiliser transformers)
         self.device = "cuda" if self.use_gpu else "cpu"
         print(f"Chargement du modèle CLIP {clip_model_name} sur {self.device}...")
-        self.clip_model, self.clip_preprocess = clip.load(
-            clip_model_name, device=self.device
-        )
-        self.embedding_dim = self.clip_model.visual.output_dim
+        self.clip_model = CLIPModel.from_pretrained(clip_model_name).to(self.device)
+        self.clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
+        # Mise à jour de la dimension d'embedding
+        self.embedding_dim = self.clip_model.config.projection_dim
 
         # Chargement du modèle de reranking
         if reranking_model:
@@ -184,12 +183,16 @@ class EnhancedVectorStore:
         Returns:
             np.ndarray: Vecteur d'embedding normalisé
         """
-        text_inputs = clip.tokenize([text]).to(self.device)
         with torch.no_grad():
-            embedding = self.clip_model.encode_text(text_inputs)
+            inputs = self.clip_processor(
+                text=[text], return_tensors="pt", padding=True, truncation=True
+            )
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-        # Normaliser le vecteur (important pour la similarité cosinus)
-        embedding = embedding / embedding.norm(dim=1, keepdim=True)
+            text_features = self.clip_model.get_text_features(**inputs)
+            # Normalisation L2 pour la similarité cosinus
+            embedding = text_features / text_features.norm(dim=1, keepdim=True)
+
         return embedding.cpu().numpy()[0]
 
     def _get_image_embedding(self, image: Union[str, Image.Image]) -> np.ndarray:
@@ -210,15 +213,15 @@ class EnhancedVectorStore:
                 print(f"Erreur lors du chargement de l'image {image}: {e}")
                 return None
 
-        # Prétraiter l'image
-        image_input = self.clip_preprocess(image).unsqueeze(0).to(self.device)
-
-        # Générer l'embedding
+        # Prétraiter l'image et générer l'embedding avec transformers
         with torch.no_grad():
-            embedding = self.clip_model.encode_image(image_input)
+            inputs = self.clip_processor(images=image, return_tensors="pt")
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-        # Normaliser le vecteur
-        embedding = embedding / embedding.norm(dim=1, keepdim=True)
+            image_features = self.clip_model.get_image_features(**inputs)
+            # Normalisation L2 pour la similarité cosinus
+            embedding = image_features / image_features.norm(dim=1, keepdim=True)
+
         return embedding.cpu().numpy()[0]
 
     def add_texts(
