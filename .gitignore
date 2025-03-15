@@ -7,3 +7,8 @@ __pycache__
 *.pyw
 *.pyz
 *.pywz
+*.ipynb.json
+python_scripts/
+RH/
+chroma_db/
+images/
