@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Multimodal - Démo</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1e40af;
+            --text: #1f2937;
+            --light-bg: #f3f4f6;
+            --border: #d1d5db;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 1em;
+            color: var(--primary-dark);
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+
+        .card {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            flex: 1;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+
+        textarea,
+        input[type="text"],
+        input[type="number"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background-color: var(--primary-dark);
+        }
+
+        #imagePreview {
+            max-width: 100%;
+            max-height: 300px;
+            margin-top: 10px;
+            display: none;
+        }
+
+        #response {
+            white-space: pre-wrap;
+            background-color: var(--light-bg);
+            padding: 15px;
+            border-radius: 4px;
+            min-height: 100px;
+        }
+
+        .sources {
+            margin-top: 20px;
+        }
+
+        .source-item {
+            padding: 10px;
+            background-color: var(--light-bg);
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+
+        .loader {
+            border: 4px solid var(--light-bg);
+            border-radius: 50%;
+            border-top: 4px solid var(--primary);
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+            display: none;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Système RAG Multimodal</h1>
+
+    <div class="container">
+        <div class="card">
+            <h2>Requête</h2>
+
+            <div class="form-group">
+                <label for="queryType">Type de requête:</label>
+                <select id="queryType" onchange="toggleQueryType()">
+                    <option value="text">Texte uniquement</option>
+                    <option value="image">Image</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="query">Question:</label>
+                <textarea id="query" rows="3" placeholder="Posez votre question ici..."></textarea>
+            </div>
+
+            <div id="imageSection" class="form-group" style="display: none;">
+                <label for="imageUpload">Image:</label>
+                <input type="file" id="imageUpload" accept="image/*" onchange="previewImage()">
+                <img id="imagePreview" src="#" alt="Aperçu de l'image" />
+            </div>
+
+            <div class="form-group">
+                <label for="topK">Nombre de résultats (top_k):</label>
+                <input type="number" id="topK" value="3" min="1" max="10">
+            </div>
+
+            <button onclick="sendQuery()">Rechercher</button>
+        </div>
+
+        <div class="card">
+            <h2>Réponse</h2>
+            <div class="loader" id="loader"></div>
+            <div id="response">La réponse s'affichera ici...</div>
+
+            <h3>Sources</h3>
+            <div id="sources" class="sources">
+                Les sources utilisées s'afficheront ici...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = "http://localhost:8000";
+
+        function toggleQueryType() {
+            const queryType = document.getElementById('queryType').value;
+            const imageSection = document.getElementById('imageSection');
+
+            if (queryType === 'image') {
+                imageSection.style.display = 'block';
+            } else {
+                imageSection.style.display = 'none';
+            }
+        }
+
+        function previewImage() {
+            const fileInput = document.getElementById('imageUpload');
+            const preview = document.getElementById('imagePreview');
+
+            if (fileInput.files && fileInput.files[0]) {
+                const reader = new FileReader();
+
+                reader.onload = function (e) {
+                    preview.src = e.target.result;
+                    preview.style.display = 'block';
+                }
+
+                reader.readAsDataURL(fileInput.files[0]);
+            }
+        }
+
+        async function sendQuery() {
+            const queryType = document.getElementById('queryType').value;
+            const query = document.getElementById('query').value;
+            const topK = document.getElementById('topK').value;
+
+            // Afficher le loader
+            document.getElementById('loader').style.display = 'block';
+            document.getElementById('response').innerText = 'Recherche en cours...';
+            document.getElementById('sources').innerText = 'En attente...';
+
+            try {
+                let response;
+
+                if (queryType === 'text') {
+                    // Requête texte
+                    response = await fetch(`${API_URL}/query/text`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            query: query,
+                            top_k: parseInt(topK)
+                        })
+                    });
+                } else {
+                    // Requête image
+                    const imageFile = document.getElementById('imageUpload').files[0];
+
+                    if (!imageFile) {
+                        alert('Veuillez sélectionner une image');
+                        document.getElementById('loader').style.display = 'none';
+                        return;
+                    }
+
+                    const formData = new FormData();
+                    formData.append('query', query);
+                    formData.append('image', imageFile);
+                    formData.append('top_k', topK);
+
+                    response = await fetch(`${API_URL}/query/image`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                }
+
+                const result = await response.json();
+
+                // Afficher la réponse
+                document.getElementById('response').innerText = result.answer;
+
+                // Afficher les sources
+                const sourcesDiv = document.getElementById('sources');
+                sourcesDiv.innerHTML = '';
+
+                if (result.sources && result.sources.length > 0) {
+                    result.sources.forEach((source, index) => {
+                        const sourceDiv = document.createElement('div');
+                        sourceDiv.className = 'source-item';
+
+                        const type = source.is_image ? 'Image' : 'Texte';
+                        const similarity = source.similarity ?
+                            `Similarité: ${(source.similarity * 100).toFixed(1)}%` : '';
+
+                        sourceDiv.innerHTML = `
+                            <strong>${index + 1}. ${type}</strong> ${similarity}<br>
+                            ${source.content}
+                        `;
+
+                        sourcesDiv.appendChild(sourceDiv);
+                    });
+                } else {
+                    sourcesDiv.innerText = 'Aucune source trouvée';
+                }
+
+            } catch (error) {
+                console.error('Erreur:', error);
+                document.getElementById('response').innerText = `Erreur: ${error.message}`;
+            } finally {
+                // Masquer le loader
+                document.getElementById('loader').style.display = 'none';
+            }
+        }
+    </script>
+</body>
+
+</html>

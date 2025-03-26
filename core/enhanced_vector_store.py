@@ -1,0 +1,938 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Module de magasin vectoriel amélioré pour un système RAG multimodal
+------------------------------------------------------------------
+Ce module implémente un magasin vectoriel basé sur FAISS pour
+la recherche approximative de plus proches voisins et des techniques
+de reranking avancées pour améliorer la précision des résultats.
+"""
+
+import os
+import json
+import shutil
+import pickle
+import numpy as np
+from typing import List, Dict, Union, Optional, Tuple, Any
+from pathlib import Path
+import torch
+from PIL import Image
+import faiss
+import chromadb
+from tqdm import tqdm
+from sentence_transformers import CrossEncoder
+from transformers import CLIPProcessor, CLIPModel
+
+# Import de la classe EnhancedEmbedder
+from enhanced_embedder import EnhancedEmbedder
+
+# Pour traitement des PDFs
+import fitz  # PyMuPDF
+
+# Constantes
+DEFAULT_CLIP_MODEL = "ViT-B/32"
+
+
+class EnhancedVectorStore:
+    """
+    Magasin vectoriel amélioré utilisant FAISS pour le stockage et la recherche
+    de vecteurs texte et image, avec capacités de reranking avancées.
+    """
+
+    def __init__(
+        self,
+        collection_name: str = "enhanced_multimodal_collection",
+        persist_directory: str = "enhanced_vector_store",
+        use_gpu: bool = False,
+        clip_model_name: str = DEFAULT_CLIP_MODEL,
+        reranking_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    ):
+        """
+        Initialise le magasin vectoriel amélioré.
+
+        Args:
+            collection_name (str): Nom de la collection à utiliser
+            persist_directory (str): Répertoire où stocker la base de données
+            use_gpu (bool): Utiliser le GPU pour FAISS si disponible
+            clip_model_name (str): Nom du modèle CLIP à utiliser
+            reranking_model (str): Nom du modèle CrossEncoder à utiliser pour le reranking
+        """
+        self.collection_name = collection_name
+        self.persist_directory = persist_directory
+        self.use_gpu = use_gpu
+
+        # Créer le répertoire de persistance s'il n'existe pas
+        os.makedirs(self.persist_directory, exist_ok=True)
+
+        # Définir les chemins de stockage
+        collection_dir = os.path.join(self.persist_directory, self.collection_name)
+        os.makedirs(collection_dir, exist_ok=True)
+        self.index_path = os.path.join(collection_dir, "faiss_index.bin")
+        self.metadata_path = os.path.join(collection_dir, "metadata.pkl")
+        self.ids_path = os.path.join(collection_dir, "ids.pkl")
+
+        # Déterminer si on utilise GPU pour FAISS
+        self.device = "cuda" if use_gpu and torch.cuda.is_available() else "cpu"
+        self.use_gpu = self.device == "cuda"
+
+        if self.use_gpu:
+            print(f"Utilisation du GPU pour FAISS ({torch.cuda.get_device_name(0)})")
+        else:
+            print("Utilisation du CPU pour FAISS")
+
+        # Convertit les noms de modèles anciennes versions vers les noms de transformers
+        if clip_model_name == "ViT-B/32":
+            transformers_model_name = "openai/clip-vit-base-patch32"
+        elif clip_model_name == "ViT-L/14":
+            transformers_model_name = "openai/clip-vit-large-patch14"
+        else:
+            transformers_model_name = clip_model_name
+
+        # Initialisation de l'embedder
+        self.embedder = EnhancedEmbedder(
+            model_name=transformers_model_name, use_gpu=use_gpu
+        )
+        self.embedding_dim = self.embedder.get_embedding_dimension()
+
+        # Chargement du modèle de reranking
+        if reranking_model:
+            print(f"Chargement du modèle de reranking {reranking_model}...")
+            self.reranker = CrossEncoder(reranking_model, device=self.device)
+        else:
+            self.reranker = None
+
+        # Initialiser ou charger l'index FAISS
+        if os.path.exists(self.index_path):
+            self._load_index()
+        else:
+            self._create_index()
+
+        # Initialiser ou charger les métadonnées
+        self.metadata = []
+        self.ids = []
+
+        if os.path.exists(self.metadata_path) and os.path.exists(self.ids_path):
+            self._load_metadata()
+        else:
+            self._save_metadata()
+
+    def _create_index(self):
+        """Crée un nouvel index FAISS optimisé pour les requêtes multimodales."""
+
+        # Paramètres optimisés pour les embeddings multimodaux
+        if self.use_gpu:
+            # Configuration GPU avec IVF plus précise
+            print("Création d'un index optimisé pour GPU...")
+
+            # Quantizer de base
+            quantizer = faiss.IndexFlatIP(self.embedding_dim)
+
+            # Nombre optimal de clusters dépend de la taille de la base
+            # Règle empirique adaptée pour les embeddings multimodaux
+            nlist = max(4096, 4 * int(np.sqrt(1000)))
+
+            # Créer l'index IVF
+            index = faiss.IndexIVFFlat(
+                quantizer, self.embedding_dim, nlist, faiss.METRIC_INNER_PRODUCT
+            )
+
+            # Augmenter nprobe pour une meilleure précision
+            # Plus élevé = meilleure précision, mais plus lent
+            index.nprobe = 128
+
+            # Convertir pour GPU
+            res = faiss.StandardGpuResources()
+            index = faiss.index_cpu_to_gpu(res, 0, index)
+
+            print(f"Index IVF créé avec nlist={nlist}, nprobe={index.nprobe}")
+            self.needs_training = True
+        else:
+            # Configuration CPU optimisée
+            print("Création d'un index optimisé pour CPU...")
+
+            # Utiliser une combinaison de réduction de dimension et HNSW
+            # pour améliorer la précision et la vitesse
+            try:
+                # Vérifier si OPQMatrix est disponible (certaines versions de FAISS)
+                opq_dim = min(64, self.embedding_dim)
+
+                index = faiss.IndexPreTransform(
+                    faiss.OPQMatrix(
+                        self.embedding_dim, opq_dim
+                    ),  # Optimisation qualité
+                    faiss.IndexHNSWFlat(
+                        opq_dim, 32, faiss.METRIC_INNER_PRODUCT
+                    ),  # Recherche efficace
+                )
+                print(f"Index OPQ+HNSW créé avec dimension={opq_dim}")
+            except Exception as e:
+                # Fallback sur HNSW standard
+                print(f"Création de l'index OPQ+HNSW échouée: {e}")
+                print("Fallback sur HNSW standard...")
+
+                # Paramètres HNSW optimisés pour multimodal
+                M = 32  # Nombre de connexions par nœud (défaut=16)
+                efConstruction = 200  # Qualité de construction (défaut=40)
+
+                index = faiss.IndexHNSWFlat(
+                    self.embedding_dim, M, faiss.METRIC_INNER_PRODUCT
+                )
+
+                # Configurer pour une meilleure qualité
+                index.hnsw.efConstruction = efConstruction
+                index.hnsw.efSearch = 128  # Paramètre de recherche
+
+                print(f"Index HNSW créé avec M={M}, efConstruction={efConstruction}")
+
+            self.needs_training = False
+
+        self.index = index
+        self._save_index()
+        print(f"Nouvel index FAISS créé avec dimension {self.embedding_dim}")
+
+    def _save_index(self):
+        """Sauvegarde l'index FAISS."""
+        # Convertir en index CPU si sur GPU
+        if self.use_gpu:
+            index_cpu = faiss.index_gpu_to_cpu(self.index)
+            faiss.write_index(index_cpu, self.index_path)
+        else:
+            faiss.write_index(self.index, self.index_path)
+
+    def _load_index(self):
+        """Charge l'index FAISS depuis le disque."""
+        index = faiss.read_index(self.index_path)
+
+        if self.use_gpu:
+            res = faiss.StandardGpuResources()
+            index = faiss.index_cpu_to_gpu(res, 0, index)
+
+        self.index = index
+        self.needs_training = False
+        print(f"Index FAISS chargé depuis {self.index_path}")
+
+    def _save_metadata(self):
+        """Sauvegarde les métadonnées et les IDs."""
+        with open(self.metadata_path, "wb") as f:
+            pickle.dump(self.metadata, f)
+
+        with open(self.ids_path, "wb") as f:
+            pickle.dump(self.ids, f)
+
+    def _load_metadata(self):
+        """Charge les métadonnées et les IDs depuis le disque."""
+        with open(self.metadata_path, "rb") as f:
+            self.metadata = pickle.load(f)
+
+        with open(self.ids_path, "rb") as f:
+            self.ids = pickle.load(f)
+
+        print(f"Métadonnées chargées: {len(self.metadata)} éléments")
+
+    def _get_text_embedding(self, text: str) -> np.ndarray:
+        """
+        Génère un embedding pour un texte avec CLIP via EnhancedEmbedder.
+
+        Args:
+            text (str): Texte à convertir en embedding
+
+        Returns:
+            np.ndarray: Vecteur d'embedding normalisé
+        """
+        try:
+            embedding = self.embedder.embed_text(text)
+            # Valider l'embedding
+            if hasattr(self.embedder, "_validate_embeddings"):
+                self.embedder._validate_embeddings(embedding)
+            return embedding
+        except Exception as e:
+            print(f"Erreur lors de la génération de l'embedding du texte: {e}")
+            return None
+
+    def _get_image_embedding(self, image: Union[str, Image.Image]) -> np.ndarray:
+        """
+        Génère un embedding pour une image avec CLIP via EnhancedEmbedder.
+
+        Args:
+            image (Union[str, Image.Image]): Chemin vers l'image ou objet PIL Image
+
+        Returns:
+            np.ndarray: Vecteur d'embedding normalisé
+        """
+        # Charger l'image si c'est un chemin
+        if isinstance(image, str):
+            try:
+                image = Image.open(image).convert("RGB")
+            except Exception as e:
+                print(f"Erreur lors du chargement de l'image {image}: {e}")
+                return None
+
+        try:
+            embedding = self.embedder.embed_image(image)
+            # Valider l'embedding
+            if hasattr(self.embedder, "_validate_embeddings"):
+                self.embedder._validate_embeddings(embedding)
+            return embedding
+        except Exception as e:
+            print(f"Erreur lors de la génération de l'embedding de l'image: {e}")
+            return None
+
+    def _get_combined_embedding(
+        self, text: str, image: Union[str, Image.Image]
+    ) -> np.ndarray:
+        """
+        Génère un embedding combiné pour un texte et une image.
+
+        Args:
+            text (str): Texte à combiner
+            image (Union[str, Image.Image]): Chemin vers l'image ou objet PIL Image
+
+        Returns:
+            np.ndarray: Vecteur d'embedding combiné normalisé
+        """
+        # Charger l'image si c'est un chemin
+        if isinstance(image, str):
+            try:
+                image = Image.open(image).convert("RGB")
+            except Exception as e:
+                print(f"Erreur lors du chargement de l'image {image}: {e}")
+                return None
+
+        try:
+            embedding = self.embedder.embed_text_and_image(text, image)
+            # Valider l'embedding
+            if hasattr(self.embedder, "_validate_embeddings"):
+                self.embedder._validate_embeddings(embedding)
+            return embedding
+        except Exception as e:
+            print(f"Erreur lors de la génération de l'embedding combiné: {e}")
+            return None
+
+    def add_texts(
+        self, texts: List[str], metadatas: Optional[List[Dict]] = None
+    ) -> List[str]:
+        """
+        Ajoute des textes à l'index.
+
+        Args:
+            texts (List[str]): Liste de textes à ajouter
+            metadatas (Optional[List[Dict]]): Métadonnées pour chaque texte
+
+        Returns:
+            List[str]: Liste des IDs générés
+        """
+        if metadatas is None:
+            metadatas = [{} for _ in texts]
+
+        ids = []
+        embeddings = []
+
+        print(f"Génération des embeddings pour {len(texts)} textes...")
+        for text, meta in zip(texts, metadatas):
+            # Générer un ID unique
+            text_id = f"txt_{len(self.ids)}"
+            ids.append(text_id)
+
+            # Générer l'embedding
+            embedding = self._get_text_embedding(text)
+            embeddings.append(embedding)
+
+            # Préparer les métadonnées
+            meta_entry = {
+                "id": text_id,
+                "content": text,
+                "metadata": meta,
+                "is_image": False,
+            }
+            self.metadata.append(meta_entry)
+            self.ids.append(text_id)
+
+        # Ajouter les embeddings à l'index
+        embeddings_array = np.array(embeddings).astype("float32")
+        self.index.add(embeddings_array)
+
+        # Sauvegarder
+        self._save_index()
+        self._save_metadata()
+
+        return ids
+
+    def add_images(
+        self,
+        images: List[Union[str, Image.Image]],
+        descriptions: Optional[List[str]] = None,
+        metadatas: Optional[List[Dict]] = None,
+    ) -> List[str]:
+        """
+        Ajoute des images à l'index.
+
+        Args:
+            images (List[Union[str, Image.Image]]): Liste de chemins d'images ou objets PIL
+            descriptions (Optional[List[str]]): Descriptions pour chaque image
+            metadatas (Optional[List[Dict]]): Métadonnées pour chaque image
+
+        Returns:
+            List[str]: Liste des IDs générés
+        """
+        if descriptions is None:
+            descriptions = ["" for _ in images]
+
+        if metadatas is None:
+            metadatas = [{} for _ in images]
+
+        ids = []
+        embeddings = []
+
+        print(f"Génération des embeddings pour {len(images)} images...")
+        for image, description, meta in zip(images, descriptions, metadatas):
+            # Générer un ID unique
+            image_id = f"img_{len(self.ids)}"
+            ids.append(image_id)
+
+            # Générer l'embedding
+            embedding = self._get_image_embedding(image)
+
+            if embedding is None:
+                print(f"Échec pour l'image {image}, ignorée")
+                continue
+
+            embeddings.append(embedding)
+
+            # Préparer les métadonnées
+            if isinstance(image, str):
+                # Stocker le chemin dans les métadonnées
+                meta["path"] = image
+
+            meta_entry = {
+                "id": image_id,
+                "content": description,
+                "metadata": meta,
+                "is_image": True,
+            }
+            self.metadata.append(meta_entry)
+            self.ids.append(image_id)
+
+        # Ajouter les embeddings à l'index
+        if embeddings:
+            embeddings_array = np.array(embeddings).astype("float32")
+            self.index.add(embeddings_array)
+
+            # Sauvegarder
+            self._save_index()
+            self._save_metadata()
+
+        return ids
+
+    def add_pdf(self, pdf_path: str, metadatas: Optional[Dict] = None) -> List[str]:
+        """
+        Ajoute un document PDF au magasin de vecteurs en extrayant texte et images.
+
+        Args:
+            pdf_path (str): Chemin vers le document PDF
+            metadatas (Optional[Dict]): Métadonnées de base pour tous les éléments du PDF
+
+        Returns:
+            List[str]: Liste des IDs générés
+        """
+        if metadatas is None:
+            metadatas = {}
+
+        # Vérifier que le fichier existe
+        if not os.path.exists(pdf_path):
+            raise FileNotFoundError(f"Le fichier PDF {pdf_path} n'existe pas")
+
+        pdf_filename = os.path.basename(pdf_path)
+        print(f"Traitement du PDF: {pdf_filename}")
+
+        # Base de métadonnées commune
+        base_meta = {"source": pdf_path, "filename": pdf_filename, **metadatas}
+
+        all_ids = []
+
+        # Ouvrir le document PDF
+        doc = fitz.open(pdf_path)
+
+        # Créer un répertoire temporaire pour les images
+        temp_img_dir = os.path.join(self.persist_directory, "temp_images")
+        os.makedirs(temp_img_dir, exist_ok=True)
+
+        # Traiter chaque page
+        for page_num, page in enumerate(tqdm(doc, desc="Pages")):
+            # Extraire le texte
+            text = page.get_text()
+
+            if text.strip():  # Ne pas ajouter les pages vides
+                # Ajouter le texte avec métadonnées spécifiques à la page
+                page_meta = {**base_meta, "page": page_num + 1, "type": "text"}
+                text_ids = self.add_texts([text], [page_meta])
+                all_ids.extend(text_ids)
+
+            # Extraire les images
+            image_list = page.get_images(full=True)
+
+            for img_index, img_info in enumerate(image_list):
+                xref = img_info[0]  # ID interne
+
+                try:
+                    # Extraire l'image
+                    base_img = doc.extract_image(xref)
+                    img_bytes = base_img["image"]
+
+                    # Sauvegarder temporairement l'image
+                    img_ext = base_img["ext"]
+                    img_filename = f"page{page_num + 1}_img{img_index + 1}.{img_ext}"
+                    img_path = os.path.join(temp_img_dir, img_filename)
+
+                    with open(img_path, "wb") as img_file:
+                        img_file.write(img_bytes)
+
+                    # Ajouter l'image avec métadonnées spécifiques
+                    img_meta = {
+                        **base_meta,
+                        "page": page_num + 1,
+                        "image_index": img_index,
+                        "type": "image",
+                    }
+
+                    # Description automatique simple
+                    description = f"Image {img_index + 1} de la page {page_num + 1} du document {pdf_filename}"
+
+                    img_ids = self.add_images([img_path], [description], [img_meta])
+                    all_ids.extend(img_ids)
+
+                except Exception as e:
+                    print(
+                        f"Erreur lors de l'extraction de l'image {img_index} de la page {page_num + 1}: {e}"
+                    )
+
+        # Fermer le document
+        doc.close()
+
+        # Nettoyer les images temporaires
+        shutil.rmtree(temp_img_dir, ignore_errors=True)
+
+        return all_ids
+
+    def query(
+        self,
+        query: Union[str, Image.Image],
+        top_k: int = 5,
+        filter_metadata: Optional[Dict] = None,
+        use_reranking: bool = True,
+    ) -> List[Dict]:
+        """
+        Interroge l'index avec une requête textuelle ou une image.
+
+        Args:
+            query (Union[str, Image.Image]): Requête textuelle ou image
+            top_k (int): Nombre maximum de résultats à retourner
+            filter_metadata (Optional[Dict]): Filtre à appliquer sur les métadonnées
+            use_reranking (bool): Si True, utilise le reranking pour améliorer les résultats
+
+        Returns:
+            List[Dict]: Liste de résultats avec contenu, métadonnées et scores
+        """
+        # Vérifier que l'index n'est pas vide
+        if len(self.ids) == 0:
+            print("L'index est vide, aucun résultat disponible")
+            return []
+
+        # Déterminer le type de requête pour le reranking
+        is_image_query = isinstance(query, Image.Image) or (
+            isinstance(query, str)
+            and any(
+                query.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif"]
+            )
+        )
+
+        # Pour les requêtes images, augmenter davantage le top_k car le reranking textuel
+        # n'est pas optimal pour les images
+        rerank_multiplier = 5 if is_image_query else 3
+        faiss_top_k = (
+            top_k * rerank_multiplier if use_reranking and self.reranker else top_k
+        )
+
+        # Générer l'embedding de la requête
+        if isinstance(query, str):
+            print(f"Recherche textuelle: {query}")
+            query_embedding = self._get_text_embedding(query)
+            query_text = query  # Pour le reranking
+        else:
+            print("Recherche par image")
+            query_embedding = self._get_image_embedding(query)
+            # Pour le reranking textuel d'une requête image, utiliser une description générique
+            # car le reranker est optimisé pour du texte
+            query_text = "image query"  # Description générique pour le reranker
+
+        if query_embedding is None:
+            print("Impossible de générer un embedding pour la requête")
+            return []
+
+        # Préparer l'embedding pour la recherche
+        query_embedding = np.array([query_embedding]).astype("float32")
+
+        # Effectuer la recherche dans FAISS
+        distances, indices = self.index.search(
+            query_embedding, min(faiss_top_k, len(self.ids))
+        )
+
+        # Convertir distances à scores de similarité
+        similarities = distances[0]
+        indices = indices[0]
+
+        # Préparer les résultats
+        results = []
+
+        for idx, similarity in zip(indices, similarities):
+            # Obtenir les métadonnées
+            meta_entry = self.metadata[idx]
+
+            # Appliquer le filtre des métadonnées si spécifié
+            if filter_metadata:
+                skip = False
+                for key, value in filter_metadata.items():
+                    if (
+                        key not in meta_entry["metadata"]
+                        or meta_entry["metadata"][key] != value
+                    ):
+                        skip = True
+                        break
+                if skip:
+                    continue
+
+            # Ajouter aux résultats seulement si similarité suffisante
+            # Seuil plus bas pour images pour compenser la difficulté du matching
+            min_similarity = 0.15 if is_image_query else 0.2
+            if similarity >= min_similarity:
+                results.append(
+                    {
+                        "id": meta_entry["id"],
+                        "content": meta_entry["content"],
+                        "metadata": meta_entry["metadata"],
+                        "is_image": meta_entry["is_image"],
+                        "similarity": float(similarity),
+                    }
+                )
+
+        # Appliquer le reranking si demandé et disponible
+        if use_reranking and self.reranker and len(results) > 1:
+            print("Application du reranking...")
+
+            # Pour les requêtes image, adapter le reranking
+            if is_image_query:
+                # Pour les requêtes image, on peut soit:
+                # 1. Ne pas faire de reranking du tout car moins efficace pour les images
+                # 2. Utiliser un reranking adapté qui prend en compte le type d'élément
+
+                # On opte pour une approche hybride qui favorise les descriptions d'images
+                # pertinentes quand la requête est une image
+                print("Optimisation du reranking pour requête image...")
+
+                # Préparer les paires pour le reranker
+                pairs = []
+                for result in results:
+                    # Pour les requêtes image, favoriser légèrement les résultats image
+                    content = result["content"]
+                    result["query_boost"] = 0.1 if result["is_image"] else 0.0
+                    pairs.append([query_text, content])
+
+                # Obtenir les scores de reranking
+                rerank_scores = self.reranker.predict(pairs)
+
+                # Appliquer les scores avec le boost pour images
+                for i, score in enumerate(rerank_scores):
+                    # Ajouter un boost pour les images quand la requête est une image
+                    results[i]["rerank_score"] = float(score) + results[i].get(
+                        "query_boost", 0
+                    )
+            else:
+                # Reranking standard pour requêtes textuelles
+                pairs = [[query_text, result["content"]] for result in results]
+                rerank_scores = self.reranker.predict(pairs)
+
+                for i, score in enumerate(rerank_scores):
+                    results[i]["rerank_score"] = float(score)
+
+            # Réordonner les résultats par score de reranking
+            results = sorted(results, key=lambda x: x["rerank_score"], reverse=True)
+        elif is_image_query:
+            # Pour les requêtes image sans reranking, assurer qu'on garde la similarité de l'embedding
+            print("Optimisation des résultats pour requête image sans reranking...")
+            # Favoriser légèrement les résultats image pour les requêtes image
+            for result in results:
+                result["adjusted_score"] = result["similarity"] * (
+                    1.1 if result["is_image"] else 1.0
+                )
+
+            # Réordonner par score ajusté
+            results = sorted(results, key=lambda x: x["adjusted_score"], reverse=True)
+
+        # Retourner les résultats limités à top_k
+        return results[:top_k]
+
+    def query_text_and_image(
+        self,
+        text: str,
+        image: Union[str, Image.Image],
+        top_k: int = 5,
+        filter_metadata: Optional[Dict] = None,
+        use_reranking: bool = True,
+    ) -> List[Dict]:
+        """
+        Interroge l'index avec une combinaison de texte et d'image.
+
+        Cette méthode permet de rechercher des documents qui correspondent
+        sémantiquement à la fois au texte et à l'image fournis, en utilisant
+        un embedding combiné pour la recherche.
+
+        Args:
+            text (str): Texte de la requête
+            image (Union[str, Image.Image]): Image de la requête (chemin ou objet PIL)
+            top_k (int): Nombre maximum de résultats à retourner
+            filter_metadata (Optional[Dict]): Filtre à appliquer sur les métadonnées
+            use_reranking (bool): Si True, utilise le reranking pour améliorer les résultats
+
+        Returns:
+            List[Dict]: Liste de résultats avec contenu, métadonnées et scores
+        """
+        # Vérifier que l'index n'est pas vide
+        if len(self.ids) == 0:
+            print("L'index est vide, aucun résultat disponible")
+            return []
+
+        # Augmenter top_k pour le reranking
+        faiss_top_k = top_k * 3 if use_reranking and self.reranker else top_k
+
+        # Générer l'embedding combiné
+        print(f"Recherche combinée texte-image: {text}")
+        query_embedding = self._get_combined_embedding(text, image)
+
+        if query_embedding is None:
+            print("Impossible de générer un embedding combiné pour la requête")
+            return []
+
+        # Préparer l'embedding pour la recherche
+        query_embedding = np.array([query_embedding]).astype("float32")
+
+        # Effectuer la recherche dans FAISS
+        distances, indices = self.index.search(
+            query_embedding, min(faiss_top_k, len(self.ids))
+        )
+
+        # Convertir distances à scores de similarité
+        similarities = distances[0]
+        indices = indices[0]
+
+        # Préparer les résultats
+        results = []
+
+        for idx, similarity in zip(indices, similarities):
+            # Obtenir les métadonnées
+            meta_entry = self.metadata[idx]
+
+            # Appliquer le filtre des métadonnées si spécifié
+            if filter_metadata:
+                skip = False
+                for key, value in filter_metadata.items():
+                    if (
+                        key not in meta_entry["metadata"]
+                        or meta_entry["metadata"][key] != value
+                    ):
+                        skip = True
+                        break
+                if skip:
+                    continue
+
+            # Ajouter aux résultats
+            results.append(
+                {
+                    "id": meta_entry["id"],
+                    "content": meta_entry["content"],
+                    "metadata": meta_entry["metadata"],
+                    "is_image": meta_entry["is_image"],
+                    "similarity": float(similarity),
+                    "query_type": "text_and_image",
+                }
+            )
+
+        # Appliquer le reranking si demandé et disponible
+        if use_reranking and self.reranker and len(results) > 1:
+            print("Application du reranking...")
+            pairs = []
+
+            # Pour le reranking, on utilise uniquement le texte de la requête
+            # car le modèle CrossEncoder ne supporte pas les images
+            for result in results:
+                pairs.append([text, result["content"]])
+
+            # Obtenir les scores de reranking
+            rerank_scores = self.reranker.predict(pairs)
+
+            # Appliquer les scores
+            for i, score in enumerate(rerank_scores):
+                results[i]["rerank_score"] = float(score)
+
+            # Réordonner les résultats par score de reranking
+            results = sorted(results, key=lambda x: x["rerank_score"], reverse=True)
+
+        # Retourner les résultats limités à top_k
+        return results[:top_k]
+
+    def reset(self):
+        """Réinitialise l'index et les métadonnées."""
+        # Supprimer l'index et les métadonnées
+        if os.path.exists(self.index_path):
+            os.remove(self.index_path)
+        if os.path.exists(self.metadata_path):
+            os.remove(self.metadata_path)
+        if os.path.exists(self.ids_path):
+            os.remove(self.ids_path)
+
+        # Recréer
+        self._create_index()
+        self.metadata = []
+        self.ids = []
+        self._save_metadata()
+
+        print("Index et métadonnées réinitialisés")
+
+
+def convert_chromadb_to_faiss(
+    chroma_collection_name: str,
+    chroma_persist_directory: str,
+    output_directory: str = "enhanced_vector_store",
+    use_gpu: bool = False,
+    clip_model_name: str = DEFAULT_CLIP_MODEL,
+    reranking_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+) -> Optional[EnhancedVectorStore]:
+    """
+    Convertit une collection ChromaDB existante en index FAISS.
+
+    Args:
+        chroma_collection_name (str): Nom de la collection ChromaDB à convertir
+        chroma_persist_directory (str): Répertoire de persistance ChromaDB
+        output_directory (str): Répertoire où stocker l'index FAISS
+        use_gpu (bool): Si True, utilise GPU pour FAISS si disponible
+        clip_model_name (str): Nom du modèle CLIP à utiliser
+        reranking_model (str): Modèle de reranking à utiliser
+
+    Returns:
+        Optional[EnhancedVectorStore]: Le nouveau magasin de vecteurs ou None en cas d'échec
+    """
+    print(f"Démarrage de la conversion de ChromaDB vers FAISS...")
+
+    try:
+        # Vérifier que le répertoire ChromaDB existe
+        if not os.path.exists(chroma_persist_directory):
+            print(f"Répertoire ChromaDB {chroma_persist_directory} introuvable")
+            return None
+
+        # Charger la collection ChromaDB
+        client = chromadb.PersistentClient(path=chroma_persist_directory)
+
+        try:
+            collection = client.get_collection(name=chroma_collection_name)
+        except ValueError:
+            print(f"Collection ChromaDB {chroma_collection_name} introuvable")
+            return None
+
+        # Récupérer toutes les données
+        chroma_data = collection.get(include=["embeddings", "documents", "metadatas"])
+
+        # Vérifier qu'il y a des données
+        if not chroma_data["ids"]:
+            print("La collection ChromaDB est vide")
+            return None
+
+        # Initialiser le nouvel EnhancedVectorStore
+        new_vs = EnhancedVectorStore(
+            collection_name=chroma_collection_name,
+            persist_directory=output_directory,
+            use_gpu=use_gpu,
+            clip_model_name=clip_model_name,
+            reranking_model=reranking_model,
+        )
+
+        # Réinitialiser le nouvel index (au cas où)
+        new_vs.reset()
+
+        # Traiter chaque élément pour l'ajouter au nouveau magasin
+        print(f"Conversion de {len(chroma_data['ids'])} éléments...")
+
+        text_entries = []
+        text_metadatas = []
+        image_paths = []
+        image_descriptions = []
+        image_metadatas = []
+
+        for i, (doc_id, embedding, document, metadata) in enumerate(
+            zip(
+                chroma_data["ids"],
+                chroma_data["embeddings"],
+                chroma_data["documents"],
+                chroma_data["metadatas"],
+            )
+        ):
+            # Déterminer si c'est une image ou du texte basé sur les métadonnées
+            is_image = (
+                metadata.get("document_type") == "image"
+                or metadata.get("type") == "image"
+            )
+
+            if is_image:
+                # Pour les images, on a besoin du chemin
+                path = metadata.get("path") or metadata.get("source")
+
+                if not path or not os.path.exists(path):
+                    print(f"⚠️ Chemin d'image invalide pour l'ID {doc_id}, ignoré")
+                    continue
+
+                image_paths.append(path)
+                image_descriptions.append(document)  # La description de l'image
+                image_metadatas.append(metadata)
+            else:
+                # Pour le texte, ajouter à la liste
+                text_entries.append(document)
+                text_metadatas.append(metadata)
+
+        # Ajouter les textes et images au nouveau magasin
+        if text_entries:
+            print(f"Ajout de {len(text_entries)} entrées textuelles...")
+            new_vs.add_texts(text_entries, text_metadatas)
+
+        if image_paths:
+            print(f"Ajout de {len(image_paths)} entrées d'images...")
+            new_vs.add_images(image_paths, image_descriptions, image_metadatas)
+
+        print(
+            f"Conversion terminée avec succès! {len(new_vs.ids)} éléments dans le nouvel index."
+        )
+        return new_vs
+
+    except Exception as e:
+        print(f"Erreur lors de la conversion: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return None
+
+
+# Exemple d'utilisation directe
+if __name__ == "__main__":
+    # Créer un magasin de vecteurs
+    vs = EnhancedVectorStore()
+
+    # Ajouter quelques textes
+    text_ids = vs.add_texts(
+        ["Ceci est un exemple de texte.", "Voici un autre texte d'exemple."]
+    )
+
+    # Ajouter une image
+    # image_ids = vs.add_images(["chemin/vers/image.jpg"], ["Une description de l'image"])
+
+    # Rechercher
+    results = vs.query("exemple de texte")
+
+    for result in results:
+        print(f"Score: {result['similarity']:.4f}, Contenu: {result['content']}")
