@@ -1,6 +1,38 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Local development settings
 .env
+.env.local
+.envrc
+
+# Jupyter Notebook
 .ipynb_checkpoints
-__pycache__
+
+# VS Code settings
+.vscode/
+
+# Archive de fichiers obsolètes
+archive/
+
+# Fichiers temporaires
+*.tmp
+*.temp
+test_doc.txt
+
 *.pyc
 *.pyo
 *.pyd
