@@ -2,11 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-Script de comparaison des performances entre les implémentations RAG multimodales
---------------------------------------------------------------------------------
-Ce script permet de comparer les performances de la version originale (ChromaDB)
-et de la version améliorée (FAISS) du système RAG multimodal,
-particulièrement pour les requêtes impliquant des images.
+Script de comparaison de performance entre les implémentations RAG
+-----------------------------------------------------------------
+Ce script compare les performances entre:
+1. L'implémentation ChromaDB originale
+2. L'implémentation FAISS optimisée
+
+Usage:
+    uv run scripts/compare_performance.py --query "Quelle est la relation entre..." --image chemin/image.jpg
 """
 
 import os

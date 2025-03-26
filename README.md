@@ -24,8 +24,10 @@ Un système de Retrieval Augmented Generation multimodal permettant de traiter e
 │   └── 📄 index.html       # Interface web simple
 │
 ├── 📁 scripts/             # Scripts utilitaires
-│   ├── 📄 setup.sh         # Installation des dépendances
-│   └── 📄 ingest.py        # Ingestion de données
+│   ├── 📄 setup.sh         # Installation des dépendances avec UV
+│   ├── 📄 remote_setup.sh  # Configuration depuis dépôt distant
+│   ├── 📄 ingest.py        # Ingestion de données
+│   └── 📄 compare_performance.py # Benchmark des implémentations
 │
 └── 📁 config/              # Configuration
     └── 📄 config.py        # Paramètres globaux
@@ -42,9 +44,12 @@ Un système de Retrieval Augmented Generation multimodal permettant de traiter e
 ## Prérequis
 
 - Python 3.9+
+- UV (gestionnaire de paquets Python rapide)
 - Ollama pour l'exécution de LLaVA
 
 ## Installation
+
+### Pour un nouveau projet
 
 ```bash
 # Cloner le dépôt
@@ -52,7 +57,18 @@ git clone <repo-url>
 cd multimodal-poc
 
 # Exécuter le script d'installation
-bash scripts/setup.sh
+./scripts/setup.sh
+```
+
+### Depuis un dépôt existant
+
+```bash
+# Option 1: Spécifier l'URL du dépôt à cloner
+./scripts/remote_setup.sh https://github.com/username/multimodal-poc.git
+
+# Option 2: Dans un dépôt déjà cloné
+cd multimodal-poc
+./scripts/remote_setup.sh
 ```
 
 ## Utilisation
@@ -61,22 +77,29 @@ bash scripts/setup.sh
 
 ```bash
 source .venv/bin/activate  # Activer l'environnement virtuel
-python -m uvicorn api.server:app --reload
+uv run uvicorn api.server:app --reload
 ```
 
 ### Ingérer des documents
 
 ```bash
 # Ingérer un document PDF
-python scripts/ingest.py --input chemin/vers/document.pdf
+uv run python scripts/ingest.py --input chemin/vers/document.pdf
 
 # Ingérer un répertoire d'images
-python scripts/ingest.py --input chemin/vers/images/ --pattern "*.jpg" --recursive
+uv run python scripts/ingest.py --input chemin/vers/images/ --pattern "*.jpg" --recursive
 ```
 
 ### Interface Web
 
 Ouvrez le fichier `web/index.html` dans votre navigateur pour accéder à l'interface utilisateur.
+
+### Comparaison de performance
+
+```bash
+# Comparer les performances des deux implémentations
+uv run python scripts/compare_performance.py --query "Votre question" --image chemin/vers/image.jpg
+```
 
 ## Paramètres de Configuration
 

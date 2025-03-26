@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# Script d'installation pour le système RAG multimodal
-# ------------------------------------------------------
+# Script d'installation pour le système RAG multimodal avec UV
+# -----------------------------------------------------------
 
-echo "Installation des dépendances du système RAG multimodal..."
+echo "Installation des dépendances du système RAG multimodal avec UV..."
 
 # Vérifier Python 3.9+
 python_version=$(python3 --version 2>&1 | awk '{print $2}')
@@ -18,25 +18,38 @@ fi
 
 echo "Version Python compatible détectée: $python_version"
 
-# Créer un environnement virtuel
+# Vérifier si UV est installé
+if ! command -v uv &> /dev/null; then
+    echo "UV n'est pas installé. Installation en cours..."
+    # On macOS and Linux.
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.cargo/bin:$PATH"
+    
+    # Vérifier à nouveau
+    if ! command -v uv &> /dev/null; then
+        echo "Échec de l'installation de UV. Veuillez l'installer manuellement: https://github.com/astral-sh/uv"
+        exit 1
+    fi
+    echo "UV installé avec succès!"
+else
+    echo "UV déjà installé."
+fi
+
+# Créer un environnement virtuel avec UV
 if [ ! -d ".venv" ]; then
-    echo "Création de l'environnement virtuel..."
-    python3 -m venv .venv
+    echo "Création de l'environnement virtuel avec UV..."
+    uv venv .venv
 fi
 
 # Activer l'environnement virtuel
 echo "Activation de l'environnement virtuel..."
 source .venv/bin/activate
 
-# Mettre à jour pip
-echo "Mise à jour de pip..."
-pip install --upgrade pip
-
-# Installer les dépendances
-echo "Installation des dépendances..."
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-pip install transformers sentence-transformers pillow faiss-cpu pymupdf
-pip install fastapi uvicorn python-multipart pydantic
+# Installer les dépendances avec UV
+echo "Installation des dépendances avec UV..."
+uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+uv pip install transformers sentence-transformers pillow faiss-cpu pymupdf
+uv pip install fastapi uvicorn python-multipart pydantic
 
 # Vérifier Ollama
 echo "Vérification de l'installation Ollama..."
@@ -60,8 +73,12 @@ fi
 echo "Création des répertoires de données..."
 mkdir -p data/raw data/vectors data/models
 
+# Générer requirements.txt pour référence
+echo "Génération du fichier requirements.txt..."
+uv pip freeze > requirements.txt
+
 # Finalisation
 echo "Installation terminée!"
 echo "Pour activer l'environnement: source .venv/bin/activate"
-echo "Pour démarrer l'API: python3 -m uvicorn api.server:app --reload"
+echo "Pour démarrer l'API: uv run uvicorn api.server:app --reload"
 echo "Pour accéder à l'interface web: ouvrez web/index.html dans votre navigateur" 
