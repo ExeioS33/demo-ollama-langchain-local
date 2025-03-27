@@ -16,6 +16,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from core.embeddings import MultimodalEmbedder
 from core.llm import LLaVA
 from core.vector_operations import FAISS
+from core.config import Config
 
 
 class RAGSystem:
@@ -23,45 +24,51 @@ class RAGSystem:
 
     def __init__(
         self,
-        vector_store_path: str = "data/vectors",
-        use_gpu: bool = False,
-        model_name: str = "llava:7b-v1.6-vicuna-q8_0",
-        temperature: float = 0.1,
-        similarity_threshold: float = 0.2,
+        vector_store_path: str = None,
+        model_name: str = None,
+        use_gpu: bool = None,
+        temperature: float = None,
+        similarity_threshold: float = None,
     ):
         """
         Initialise le système RAG multimodal.
 
         Args:
             vector_store_path: Chemin vers l'index vectoriel
-            use_gpu: Utiliser le GPU si disponible
             model_name: Nom du modèle LLM à utiliser
+            use_gpu: Utiliser le GPU si disponible
             temperature: Température pour la génération
             similarity_threshold: Seuil minimal de similarité
         """
-        self.use_gpu = use_gpu and self._check_gpu_available()
+        # Utiliser les valeurs de config.py ou les paramètres fournis
+        self.vector_store_path = vector_store_path or Config.VECTOR_STORE_PATH
+        self.model_name = model_name or Config.LLM_MODEL
+        self.use_gpu = use_gpu if use_gpu is not None else Config.USE_GPU
+        self.temperature = temperature or Config.TEMPERATURE
+        self.similarity_threshold = similarity_threshold or Config.SIMILARITY_THRESHOLD
+
+        # Vérifier la disponibilité du GPU si demandé
+        if self.use_gpu:
+            self.use_gpu = self._check_gpu_available()
 
         # Initialiser les composants principaux
-        print(f"Initialisation du système RAG avec modèle {model_name}")
+        print(f"Initialisation du système RAG avec modèle {self.model_name}")
 
         # Composant pour les embeddings
         self.embedder = MultimodalEmbedder(use_gpu=self.use_gpu)
 
         # Vérifier si l'index vectoriel existe
-        if os.path.exists(vector_store_path):
-            print(f"Chargement de l'index vectoriel depuis {vector_store_path}")
-            self.vector_db = FAISS.load(vector_store_path, self.embedder)
+        if os.path.exists(self.vector_store_path):
+            print(f"Chargement de l'index vectoriel depuis {self.vector_store_path}")
+            self.vector_db = FAISS.load(self.vector_store_path, self.embedder)
         else:
-            print(f"Création d'un nouvel index vectoriel dans {vector_store_path}")
+            print(f"Création d'un nouvel index vectoriel dans {self.vector_store_path}")
             self.vector_db = FAISS(
-                embedder=self.embedder, persist_directory=vector_store_path
+                embedder=self.embedder, persist_directory=self.vector_store_path
             )
 
         # Composant LLM
-        self.llm = LLaVA(model_name=model_name, temperature=temperature)
-
-        # Paramètres
-        self.similarity_threshold = similarity_threshold
+        self.llm = LLaVA(model_name=self.model_name, temperature=self.temperature)
 
     def _check_gpu_available(self) -> bool:
         """Vérifie si un GPU est disponible."""
@@ -171,8 +178,8 @@ class RAGSystem:
         self,
         document_path: str,
         description: Optional[str] = None,
-        chunk_size: int = 1000,
-        chunk_overlap: int = 200,
+        chunk_size: int = None,
+        chunk_overlap: int = None,
     ) -> List[str]:
         """
         Ajoute un document au système avec chunking intelligent.
@@ -186,6 +193,10 @@ class RAGSystem:
         Returns:
             List[str]: IDs des éléments ajoutés
         """
+        # Utiliser les valeurs de configuration ou les valeurs par défaut
+        chunk_size = chunk_size or Config.CHUNK_SIZE
+        chunk_overlap = chunk_overlap or Config.CHUNK_OVERLAP
+
         print(
             f"Configuration du chunking: taille={chunk_size}, chevauchement={chunk_overlap}"
         )
