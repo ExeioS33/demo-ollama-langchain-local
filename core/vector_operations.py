@@ -12,57 +12,194 @@ import os
 import pickle
 import faiss
 import numpy as np
-from typing import List, Dict, Union, Optional, Any
+from typing import List, Dict, Union, Optional, Any, Tuple
 from PIL import Image
 import shutil
 from pathlib import Path
 import fitz  # PyMuPDF
+import re
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+import uuid
+
+
+class TextSplitter:
+    """
+    Classe pour découper intelligemment du texte en chunks.
+    Utilise RecursiveCharacterTextSplitter de LangChain.
+    """
+
+    def __init__(self, chunk_size=1000, chunk_overlap=200):
+        """
+        Initialise le TextSplitter avec les paramètres spécifiés.
+
+        Args:
+            chunk_size: Taille des chunks en caractères
+            chunk_overlap: Chevauchement entre chunks en caractères
+        """
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.separators = ["\n\n", "\n", ". ", ", ", " ", ""]
+
+        self.splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            length_function=len,
+            separators=self.separators,
+        )
+
+    def update_splitter(self, chunk_size=None, chunk_overlap=None):
+        """
+        Met à jour les paramètres du splitter et récrée l'instance.
+
+        Args:
+            chunk_size: Nouvelle taille des chunks
+            chunk_overlap: Nouveau chevauchement entre chunks
+        """
+        if chunk_size is not None:
+            self.chunk_size = chunk_size
+        if chunk_overlap is not None:
+            self.chunk_overlap = chunk_overlap
+
+        # Recréer le splitter avec les nouveaux paramètres
+        self.splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.chunk_overlap,
+            length_function=len,
+            separators=self.separators,
+        )
+        return self
+
+    def __str__(self):
+        """Représentation sous forme de chaîne."""
+        return f"TextSplitter(chunk_size={self.chunk_size}, chunk_overlap={self.chunk_overlap})"
+
+    def split_text(self, text, metadata=None):
+        """
+        Découpe un texte en chunks avec métadonnées.
+
+        Args:
+            text: Texte à découper
+            metadata: Métadonnées de base à enrichir
+
+        Returns:
+            List[Dict]: Liste de dicts avec 'content' et 'metadata'
+        """
+        if metadata is None:
+            metadata = {}
+
+        # Extraire un titre si possible
+        title = self._extract_title(text)
+        if title and "title" not in metadata:
+            metadata["title"] = title
+
+        # Découper le texte
+        raw_chunks = self.splitter.split_text(text)
+
+        # Créer une liste de chunks avec métadonnées
+        chunks = []
+        for i, chunk_text in enumerate(raw_chunks):
+            # Copier les métadonnées de base et ajouter des informations sur le chunk
+            chunk_metadata = metadata.copy()
+            chunk_metadata.update(
+                {
+                    "chunk_index": i,
+                    "total_chunks": len(raw_chunks),
+                    "chunk_size": len(chunk_text),
+                    "extracted_title": title is not None,
+                }
+            )
+
+            chunks.append({"content": chunk_text, "metadata": chunk_metadata})
+
+        return chunks
+
+    def split_pdf_page(self, page_text, page_num, total_pages, metadata=None):
+        """
+        Découpe une page de PDF en chunks avec métadonnées.
+
+        Args:
+            page_text: Texte de la page
+            page_num: Numéro de la page
+            total_pages: Nombre total de pages
+            metadata: Métadonnées de base à enrichir
+
+        Returns:
+            List[Dict]: Liste de dicts avec 'content' et 'metadata'
+        """
+        if metadata is None:
+            metadata = {}
+
+        # Ajouter les informations de page aux métadonnées
+        page_metadata = metadata.copy()
+        page_metadata.update(
+            {
+                "page": page_num,
+                "total_pages": total_pages,
+            }
+        )
+
+        # Utiliser la méthode split_text pour découper le texte de la page
+        page_chunks = self.split_text(page_text, page_metadata)
+
+        return page_chunks
+
+    def _extract_title(self, text):
+        """
+        Tente d'extraire un titre significatif du texte.
+
+        Args:
+            text: Texte à analyser
+
+        Returns:
+            str or None: Titre extrait ou None si aucun titre trouvé
+        """
+        # Essayer d'extraire un titre de type Markdown (##, ###)
+        lines = text.split("\n")
+        for line in lines[:5]:  # Examiner uniquement les 5 premières lignes
+            line = line.strip()
+            if line.startswith("# "):  # Titre principal
+                return line[2:].strip()
+            elif line.startswith("## "):  # Sous-titre
+                return line[3:].strip()
+
+        # Si aucun titre markdown, prendre la première ligne non vide
+        for line in lines[:5]:
+            line = line.strip()
+            if line and len(line) < 100:  # Une ligne courte non vide
+                return line
+
+        return None
 
 
 class FAISS:
-    """Gestionnaire d'index vectoriel FAISS."""
+    """Classe pour gérer les opérations vectorielles avec FAISS."""
 
-    def __init__(
-        self,
-        embedder,
-        collection_name: str = "multimodal_collection",
-        persist_directory: str = "data/vectors",
-        use_gpu: bool = False,
-    ):
+    def __init__(self, embedder, persist_directory="vector_store"):
         """
-        Initialise l'index vectoriel FAISS.
+        Initialise un nouvel index FAISS.
 
         Args:
-            embedder: Instance du générateur d'embeddings
-            collection_name: Nom de la collection
-            persist_directory: Répertoire de persistance
-            use_gpu: Utiliser le GPU si disponible
+            embedder: Instance de MultimodalEmbedder pour générer les embeddings
+            persist_directory: Répertoire pour persister l'index
         """
         self.embedder = embedder
-        self.collection_name = collection_name
         self.persist_directory = persist_directory
-        self.use_gpu = use_gpu
+        self.metadata = []
+        self.text_splitter = TextSplitter()
 
-        # Dimension des embeddings
-        self.dimension = embedder.embedding_dim
-
-        # Créer le répertoire de persistance
+        # Créer le répertoire de persistance s'il n'existe pas
         os.makedirs(persist_directory, exist_ok=True)
 
-        # Chemins des fichiers
-        self.index_path = os.path.join(
-            persist_directory, f"{collection_name}_index.bin"
-        )
-        self.metadata_path = os.path.join(
-            persist_directory, f"{collection_name}_metadata.pkl"
-        )
+        # Initialiser l'index FAISS
+        self.dimension = self.embedder.dimension
+        self.index = faiss.IndexFlatL2(self.dimension)
 
-        # Initialiser l'index et les métadonnées
-        self.index = self._create_index()
-        self.metadata = []
+        # Charger l'index s'il existe
+        index_path = os.path.join(persist_directory, "index.faiss")
+        metadata_path = os.path.join(persist_directory, "metadata.json")
 
-        # Sauvegarder l'index initial
-        self._save()
+        if os.path.exists(index_path) and os.path.exists(metadata_path):
+            self.load_index(index_path, metadata_path)
 
     def _create_index(self) -> faiss.Index:
         """Crée un nouvel index FAISS optimisé."""
@@ -82,114 +219,152 @@ class FAISS:
 
     def _save(self):
         """Sauvegarde l'index et les métadonnées."""
-        # Sauvegarder l'index
-        if self.use_gpu:
-            # Convertir en index CPU pour sauvegarde
-            cpu_index = faiss.index_gpu_to_cpu(self.index)
-            faiss.write_index(cpu_index, self.index_path)
-        else:
-            faiss.write_index(self.index, self.index_path)
+        # Créer le répertoire de persistance s'il n'existe pas
+        os.makedirs(self.persist_directory, exist_ok=True)
 
-        # Sauvegarder les métadonnées
-        with open(self.metadata_path, "wb") as f:
-            pickle.dump(self.metadata, f)
+        # Chemins des fichiers
+        index_path = os.path.join(self.persist_directory, "index.faiss")
+        metadata_path = os.path.join(self.persist_directory, "metadata.json")
 
-        print(f"Index et métadonnées sauvegardés: {len(self.metadata)} éléments")
+        # Sauvegarder l'index FAISS
+        faiss.write_index(self.index, index_path)
+
+        # Sauvegarder les métadonnées au format JSON pour faciliter le débogage
+        import json
+
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            # Convertir les métadonnées en format JSON-compatible
+            json_metadata = []
+            for entry in self.metadata:
+                # Créer une copie pour éviter de modifier l'original
+                json_entry = {
+                    "id": entry["id"],
+                    "content": entry["content"],
+                    "metadata": entry["metadata"],
+                    "is_image": entry["is_image"],
+                }
+                json_metadata.append(json_entry)
+
+            json.dump(json_metadata, f, ensure_ascii=False, indent=2)
+
+        print(
+            f"Index et métadonnées sauvegardés: {len(self.metadata)} éléments dans {self.persist_directory}"
+        )
+
+    def load_index(self, index_path, metadata_path):
+        """
+        Charge un index FAISS existant et ses métadonnées.
+
+        Args:
+            index_path: Chemin vers le fichier d'index FAISS
+            metadata_path: Chemin vers le fichier de métadonnées
+        """
+        try:
+            # Charger l'index FAISS
+            self.index = faiss.read_index(index_path)
+
+            # Charger les métadonnées
+            import json
+
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                self.metadata = json.load(f)
+
+            print(
+                f"Index chargé avec {len(self.metadata)} éléments depuis {index_path}"
+            )
+
+        except Exception as e:
+            print(f"Erreur lors du chargement de l'index: {e}")
+            # Initialiser un nouvel index vide
+            self.index = faiss.IndexFlatL2(self.dimension)
+            self.metadata = []
 
     @classmethod
-    def load(cls, persist_directory: str, embedder) -> "FAISS":
+    def load(cls, persist_directory, embedder):
         """
         Charge un index FAISS existant.
 
         Args:
-            persist_directory: Répertoire où se trouve l'index
-            embedder: Instance du générateur d'embeddings
+            persist_directory: Répertoire de persistance
+            embedder: Instance de l'embedder à utiliser
 
         Returns:
-            FAISS: Instance initialisée avec l'index chargé
+            FAISS: Instance avec l'index chargé
         """
-        # Trouver le fichier d'index
-        index_files = list(Path(persist_directory).glob("*_index.bin"))
-        if not index_files:
-            raise FileNotFoundError(f"Aucun index trouvé dans {persist_directory}")
+        instance = cls(embedder=embedder, persist_directory=persist_directory)
 
-        index_path = str(index_files[0])
-        collection_name = os.path.basename(index_path).replace("_index.bin", "")
-        metadata_path = os.path.join(
-            persist_directory, f"{collection_name}_metadata.pkl"
-        )
-
-        # Vérifier si les métadonnées existent
-        if not os.path.exists(metadata_path):
-            raise FileNotFoundError(f"Métadonnées manquantes: {metadata_path}")
-
-        # Créer une instance
-        instance = cls(
-            embedder=embedder,
-            collection_name=collection_name,
-            persist_directory=persist_directory,
-            use_gpu=False,  # Sera corrigé après chargement
-        )
-
-        # Charger l'index
-        instance.index = faiss.read_index(index_path)
-
-        # Charger les métadonnées
-        with open(metadata_path, "rb") as f:
-            instance.metadata = pickle.load(f)
-
-        print(f"Index chargé avec {len(instance.metadata)} éléments")
+        # Les fichiers sont déjà chargés dans l'initialisation si présents
         return instance
 
-    def add_texts(
-        self, texts: List[str], metadatas: Optional[List[Dict]] = None
-    ) -> List[str]:
+    def add_texts(self, texts, metadatas=None, chunk_size=None, chunk_overlap=None):
         """
-        Ajoute des textes à l'index.
+        Ajoute des textes à l'index vectoriel.
 
         Args:
-            texts: Liste de textes
-            metadatas: Métadonnées optionnelles
+            texts: Liste de textes à ajouter
+            metadatas: Liste de métadonnées associées
+            chunk_size: Taille des chunks (optional)
+            chunk_overlap: Chevauchement entre chunks (optional)
 
         Returns:
-            List[str]: IDs des textes ajoutés
+            List[str]: IDs des documents ajoutés
         """
-        ids = []
-
-        # Générer les IDs et préparer les métadonnées
         if metadatas is None:
             metadatas = [{} for _ in texts]
 
-        # Générer les embeddings
-        embeddings = []
+        # Mise à jour des paramètres de chunking si spécifiés
+        if chunk_size is not None or chunk_overlap is not None:
+            self.text_splitter.update_splitter(chunk_size, chunk_overlap)
+
+        added_ids = []
+
+        # Traiter chaque texte
         for i, (text, metadata) in enumerate(zip(texts, metadatas)):
-            # Générer un ID
-            text_id = f"text_{len(self.metadata) + i}"
-            ids.append(text_id)
+            # Chunking intelligent du texte
+            chunks = self.text_splitter.split_text(text, metadata)
 
-            # Générer l'embedding
-            embedding = self.embedder.embed_text(text)
-            embeddings.append(embedding)
+            # Ajouter chaque chunk à l'index
+            for chunk in chunks:
+                chunk_content = chunk["content"]
+                chunk_metadata = chunk["metadata"]
 
-            # Ajouter les métadonnées
-            self.metadata.append(
-                {
-                    "id": text_id,
-                    "content": text,
-                    "metadata": metadata,
-                    "is_image": False,
-                }
-            )
+                try:
+                    # Générer l'embedding
+                    embedding = self.embedder.embed(chunk_content)
 
-        # Ajouter les embeddings à l'index
-        if embeddings:
-            embeddings_array = np.array(embeddings).astype("float32")
-            self.index.add(embeddings_array)
+                    if embedding is None or not embedding.size:
+                        print(
+                            f"AVERTISSEMENT: Embedding vide ou null pour le chunk {i}"
+                        )
+                        continue
 
-            # Sauvegarder
-            self._save()
+                    # Générer un ID unique
+                    doc_id = str(uuid.uuid4())
 
-        return ids
+                    # Ajouter à l'index FAISS
+                    self.index.add(np.array([embedding]))
+
+                    # Stocker les métadonnées
+                    self.metadata.append(
+                        {
+                            "id": doc_id,
+                            "content": chunk_content,
+                            "metadata": chunk_metadata,
+                            "is_image": False,
+                        }
+                    )
+
+                    added_ids.append(doc_id)
+
+                except Exception as e:
+                    print(f"Erreur lors de l'ajout du chunk {i}: {str(e)}")
+                    continue
+
+        # Persister l'index
+        self._save()
+
+        print(f"{len(added_ids)} chunks ajoutés à l'index vectoriel.")
+        return added_ids
 
     def add_images(
         self,
@@ -208,7 +383,7 @@ class FAISS:
         Returns:
             List[str]: IDs des images ajoutées
         """
-        ids = []
+        added_ids = []
 
         # Préparer les descriptions et métadonnées
         if descriptions is None:
@@ -217,8 +392,7 @@ class FAISS:
         if metadatas is None:
             metadatas = [{} for _ in images]
 
-        # Générer les embeddings
-        embeddings = []
+        # Traiter chaque image
         for i, (image_path, description, metadata) in enumerate(
             zip(images, descriptions, metadatas)
         ):
@@ -226,13 +400,19 @@ class FAISS:
                 # Charger l'image
                 image = Image.open(image_path).convert("RGB")
 
-                # Générer un ID
-                image_id = f"image_{len(self.metadata) + i}"
-                ids.append(image_id)
+                # Générer un ID unique
+                image_id = str(uuid.uuid4())
+                added_ids.append(image_id)
 
                 # Générer l'embedding
-                embedding = self.embedder.embed_image(image)
-                embeddings.append(embedding)
+                embedding = self.embedder.embed(image)
+
+                if embedding is None or not embedding.size:
+                    print(f"AVERTISSEMENT: Embedding vide pour l'image {image_path}")
+                    continue
+
+                # Ajouter à l'index FAISS
+                self.index.add(np.array([embedding]))
 
                 # Mettre à jour les métadonnées
                 metadata["path"] = image_path
@@ -251,98 +431,109 @@ class FAISS:
             except Exception as e:
                 print(f"Erreur lors du traitement de l'image {image_path}: {e}")
 
-        # Ajouter les embeddings à l'index
-        if embeddings:
-            embeddings_array = np.array(embeddings).astype("float32")
-            self.index.add(embeddings_array)
+        # Persister l'index
+        self._save()
 
-            # Sauvegarder
-            self._save()
+        print(f"{len(added_ids)} images ajoutées à l'index vectoriel.")
+        return added_ids
 
-        return ids
-
-    def add_pdf(self, pdf_path: str, metadatas: Optional[Dict] = None) -> List[str]:
+    def add_pdf(self, pdf_path, metadata=None, chunk_size=None, chunk_overlap=None):
         """
-        Ajoute un document PDF à l'index.
+        Ajoute un document PDF à l'index vectoriel.
 
         Args:
-            pdf_path: Chemin vers le PDF
-            metadatas: Métadonnées de base
+            pdf_path: Chemin vers le fichier PDF
+            metadata: Métadonnées du document
+            chunk_size: Taille des chunks (optional)
+            chunk_overlap: Chevauchement entre chunks (optional)
 
         Returns:
-            List[str]: IDs des éléments ajoutés
+            List[str]: IDs des pages ajoutées
         """
-        if not os.path.exists(pdf_path):
-            raise FileNotFoundError(f"PDF introuvable: {pdf_path}")
+        if metadata is None:
+            metadata = {}
 
-        if metadatas is None:
-            metadatas = {}
+        # Mise à jour des paramètres de chunking si spécifiés
+        if chunk_size is not None or chunk_overlap is not None:
+            self.text_splitter.update_splitter(chunk_size, chunk_overlap)
 
-        all_ids = []
+        try:
+            import PyPDF2
+        except ImportError:
+            print("PyPDF2 n'est pas installé. Exécutez 'pip install PyPDF2'.")
+            return []
 
-        # Métadonnées de base communes
-        base_metadata = {
-            "source": pdf_path,
-            "filename": os.path.basename(pdf_path),
-            **metadatas,
-        }
+        added_ids = []
 
-        # Ouvrir le document
-        doc = fitz.open(pdf_path)
+        try:
+            with open(pdf_path, "rb") as f:
+                reader = PyPDF2.PdfReader(f)
+                total_pages = len(reader.pages)
 
-        # Créer un répertoire temporaire pour les images
-        temp_dir = os.path.join(self.persist_directory, "temp_images")
-        os.makedirs(temp_dir, exist_ok=True)
+                # Ajouter le nombre total de pages aux métadonnées
+                metadata.update({"total_pages": total_pages})
 
-        # Traiter chaque page
-        for page_num, page in enumerate(doc):
-            # Extraire le texte
-            text = page.get_text()
+                # Traiter chaque page
+                for page_num, page in enumerate(reader.pages):
+                    page_text = page.extract_text()
 
-            if text.strip():
-                # Ajouter le texte
-                page_metadata = {**base_metadata, "page": page_num + 1, "type": "text"}
-                text_ids = self.add_texts([text], [page_metadata])
-                all_ids.extend(text_ids)
+                    if not page_text.strip():
+                        print(f"Page {page_num + 1} vide, ignorée.")
+                        continue
 
-            # Extraire les images
-            image_list = page.get_images(full=True)
-
-            for img_index, img_info in enumerate(image_list):
-                try:
-                    xref = img_info[0]
-                    base_img = doc.extract_image(xref)
-                    img_bytes = base_img["image"]
-                    img_ext = base_img["ext"]
-
-                    # Sauvegarder temporairement
-                    img_filename = f"page{page_num + 1}_img{img_index + 1}.{img_ext}"
-                    img_path = os.path.join(temp_dir, img_filename)
-
-                    with open(img_path, "wb") as img_file:
-                        img_file.write(img_bytes)
-
-                    # Ajouter l'image
-                    img_metadata = {
-                        **base_metadata,
-                        "page": page_num + 1,
-                        "image_index": img_index,
-                        "type": "image",
-                    }
-                    description = f"Image {img_index + 1} de la page {page_num + 1} du document {os.path.basename(pdf_path)}"
-
-                    img_ids = self.add_images([img_path], [description], [img_metadata])
-                    all_ids.extend(img_ids)
-
-                except Exception as e:
-                    print(
-                        f"Erreur lors de l'extraction de l'image {img_index} page {page_num + 1}: {e}"
+                    # Chunking intelligent de la page
+                    page_chunks = self.text_splitter.split_pdf_page(
+                        page_text, page_num + 1, total_pages, metadata
                     )
 
-        # Nettoyer
-        shutil.rmtree(temp_dir, ignore_errors=True)
+                    # Ajouter chaque chunk de page à l'index
+                    for chunk in page_chunks:
+                        chunk_content = chunk["content"]
+                        chunk_metadata = chunk["metadata"]
 
-        return all_ids
+                        try:
+                            # Générer l'embedding
+                            embedding = self.embedder.embed(chunk_content)
+
+                            if embedding is None or not embedding.size:
+                                print(
+                                    f"AVERTISSEMENT: Embedding vide pour la page {page_num + 1}"
+                                )
+                                continue
+
+                            # Générer un ID unique
+                            doc_id = str(uuid.uuid4())
+
+                            # Ajouter à l'index FAISS
+                            self.index.add(np.array([embedding]))
+
+                            # Stocker les métadonnées
+                            self.metadata.append(
+                                {
+                                    "id": doc_id,
+                                    "content": chunk_content,
+                                    "metadata": chunk_metadata,
+                                    "is_image": False,
+                                }
+                            )
+
+                            added_ids.append(doc_id)
+
+                        except Exception as e:
+                            print(
+                                f"Erreur lors de l'ajout du chunk de la page {page_num + 1}: {str(e)}"
+                            )
+                            continue
+
+        except Exception as e:
+            print(f"Erreur lors du traitement du PDF {pdf_path}: {str(e)}")
+            return []
+
+        # Persister l'index
+        self._save()
+
+        print(f"{len(added_ids)} chunks ajoutés à partir du PDF.")
+        return added_ids
 
     def search(
         self,
@@ -406,4 +597,23 @@ class FAISS:
         # Trier par score et limiter
         results = sorted(results, key=lambda x: x["similarity"], reverse=True)
 
-        return results[:top_k]
+        # Déduplication basée sur le contenu (pour éviter les chunks trop similaires)
+        deduplicated_results = []
+        seen_content_starts = set()
+
+        for result in results:
+            # Pour les textes, utiliser le début du chunk pour déduplication
+            if not result["is_image"]:
+                # Prendre les premiers 100 caractères comme signature
+                content_start = result["content"][:100].strip()
+                # Si déjà vu un chunk similaire, sauter
+                if content_start in seen_content_starts:
+                    continue
+                seen_content_starts.add(content_start)
+
+            deduplicated_results.append(result)
+            # Limiter au nombre demandé
+            if len(deduplicated_results) >= top_k:
+                break
+
+        return deduplicated_results

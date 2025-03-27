@@ -10,6 +10,7 @@ Implémentation simplifiée du pipeline RAG multimodal complet.
 import os
 from typing import Dict, List, Union, Optional, Any
 from PIL import Image
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 # Import des modules principaux
 from core.embeddings import MultimodalEmbedder
@@ -147,38 +148,182 @@ class RAGSystem:
             else:
                 # Format pour le texte
                 metadata = result.get("metadata", {})
+                # Inclure le titre si disponible
+                title = metadata.get("title", "")
+                title_info = f" - {title}" if title else ""
+
+                # Inclure la page pour les PDF
+                page_info = ""
+                if "page" in metadata and "total_pages" in metadata:
+                    page_info = f" (Page {metadata['page']}/{metadata['total_pages']})"
+
+                # Source du document
                 source = metadata.get("source", "inconnu")
+
+                # Formater le contexte
                 context_pieces.append(
-                    f"[Document {i + 1} - Source: {source}] {result['content']}"
+                    f"[Document {i + 1}{title_info}{page_info} - Source: {source}] {result['content']}"
                 )
 
         return "\n\n".join(context_pieces)
 
     def add_document(
-        self, document_path: str, description: Optional[str] = None
+        self,
+        document_path: str,
+        description: Optional[str] = None,
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
     ) -> List[str]:
         """
-        Ajoute un document au système.
+        Ajoute un document au système avec chunking intelligent.
 
         Args:
             document_path: Chemin vers le document
             description: Description optionnelle (pour images)
+            chunk_size: Taille des chunks pour le texte (en caractères)
+            chunk_overlap: Chevauchement entre chunks (en caractères)
 
         Returns:
             List[str]: IDs des éléments ajoutés
         """
-        # Déterminer le type de document
+        print(
+            f"Configuration du chunking: taille={chunk_size}, chevauchement={chunk_overlap}"
+        )
+
+        # Configurer les paramètres de chunking
+        if not hasattr(self.vector_db, "text_splitter"):
+            print(
+                "ATTENTION: Le TextSplitter n'est pas disponible dans la base vectorielle."
+            )
+        else:
+            self.vector_db.text_splitter.chunk_size = chunk_size
+            self.vector_db.text_splitter.chunk_overlap = chunk_overlap
+            self.vector_db.text_splitter.update_splitter(chunk_size, chunk_overlap)
+            print(f"TextSplitter configuré avec succès: {self.vector_db.text_splitter}")
+
+        # Déterminer automatiquement le type de document
         if document_path.lower().endswith((".jpg", ".jpeg", ".png", ".gif")):
             print(f"Ajout de l'image {document_path}")
+            metadata = self._prepare_image_metadata(document_path, description)
             return self.vector_db.add_images(
-                [document_path], [description] if description else None
+                [document_path], [description] if description else None, [metadata]
             )
         elif document_path.lower().endswith(".pdf"):
             print(f"Ajout du PDF {document_path}")
-            return self.vector_db.add_pdf(document_path)
+            metadata = self._prepare_document_metadata(document_path)
+            return self.vector_db.add_pdf(
+                document_path, metadata, chunk_size, chunk_overlap
+            )
         else:
             # Traitement comme texte
             print(f"Ajout du document texte {document_path}")
+            metadata = self._prepare_document_metadata(document_path)
             with open(document_path, "r", encoding="utf-8") as f:
                 text = f.read()
-            return self.vector_db.add_texts([text])
+            return self.vector_db.add_texts(
+                [text], [metadata], chunk_size, chunk_overlap
+            )
+
+    def _prepare_document_metadata(self, document_path: str) -> Dict[str, Any]:
+        """
+        Prépare les métadonnées pour un document.
+
+        Args:
+            document_path: Chemin vers le document
+
+        Returns:
+            Dict: Métadonnées enrichies
+        """
+        filename = os.path.basename(document_path)
+        file_extension = os.path.splitext(filename)[1].lower()
+
+        # Déterminer le type de document
+        doc_type = "unknown"
+        if file_extension in [".txt", ".md", ".html", ".docx"]:
+            doc_type = "text"
+        elif file_extension == ".pdf":
+            doc_type = "pdf"
+        elif file_extension in [".jpg", ".jpeg", ".png", ".gif"]:
+            doc_type = "image"
+
+        # Déterminer la catégorie basée sur le chemin
+        category = self._extract_category_from_path(document_path)
+
+        return {
+            "source": document_path,
+            "filename": filename,
+            "document_type": doc_type,
+            "category": category,
+            "date_added": self._get_current_date(),
+        }
+
+    def _prepare_image_metadata(
+        self, image_path: str, description: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Prépare les métadonnées pour une image.
+
+        Args:
+            image_path: Chemin vers l'image
+            description: Description optionnelle
+
+        Returns:
+            Dict: Métadonnées enrichies
+        """
+        # Obtenir les métadonnées de base
+        metadata = self._prepare_document_metadata(image_path)
+
+        # Ajouter des métadonnées spécifiques aux images
+        try:
+            with Image.open(image_path) as img:
+                metadata.update(
+                    {
+                        "width": img.width,
+                        "height": img.height,
+                        "format": img.format,
+                        "mode": img.mode,
+                        "has_description": description is not None,
+                    }
+                )
+        except Exception as e:
+            print(
+                f"Erreur lors de l'extraction des métadonnées de l'image {image_path}: {e}"
+            )
+
+        return metadata
+
+    def _extract_category_from_path(self, file_path: str) -> str:
+        """
+        Extrait une catégorie du chemin du fichier.
+
+        Args:
+            file_path: Chemin du fichier
+
+        Returns:
+            str: Catégorie déduite du chemin
+        """
+        # Normaliser le chemin
+        path = os.path.normpath(file_path)
+        parts = path.split(os.sep)
+
+        # Si le fichier est dans un sous-dossier, utiliser le nom du dossier comme catégorie
+        if len(parts) > 1:
+            # Chercher le premier dossier significatif comme catégorie
+            for part in reversed(parts[:-1]):  # Ignorer le nom du fichier
+                if part and part not in [
+                    ".",
+                    "..",
+                    "data",
+                    "documents",
+                    "images",
+                    "pdf",
+                ]:
+                    return part
+
+        return "général"  # Catégorie par défaut
+
+    def _get_current_date(self) -> str:
+        """Obtient la date actuelle au format YYYY-MM-DD."""
+        from datetime import datetime
+
+        return datetime.now().strftime("%Y-%m-%d")
