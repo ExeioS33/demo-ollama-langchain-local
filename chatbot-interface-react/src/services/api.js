@@ -206,47 +206,34 @@ export const sendImageQuery = async (imageFile, query = 'Décris cette image', t
 
 /**
  * Send a combined text and image query to the RAG system
- * @param {string} query - The text query
- * @param {File} imageFile - Optional image file
- * @param {boolean} referenceImage - Whether to reference indexed images
- * @param {number} topK - Number of results to retrieve
- * @returns {Promise} - The response with answer and sources
+ * @param {string} text - Text query
+ * @param {File} image - Image file
+ * @returns {Promise<Object>} - Response with answer and sources
  */
-export const sendCombinedQuery = async (query, imageFile = null, referenceImage = false, topK = 3) => {
+export const sendCombinedQuery = async (text, image) => {
+    if (USE_MOCK_DATA) {
+        // Return mock data for development
+        return mockResponses.textQuery;
+    }
+
     try {
-        // Return mock data if API is not available
-        if (USE_MOCK_DATA) {
-            console.log('Using mock data for combined query:', query);
-            // Add a delay to simulate network request
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            return mockResponses.textQuery;
-        }
-
         const formData = new FormData();
-        formData.append('query', query);
-        if (imageFile) formData.append('image', imageFile);
-        formData.append('reference_image', referenceImage);
-        formData.append('top_k', topK);
+        formData.append('query', text);
+        formData.append('image', image);
+        formData.append('top_k', 3);
 
-        const response = await fetch(`${API_BASE_URL}/query/combined`, {
+        const response = await fetch(`${API_BASE_URL}/query/image`, {
             method: 'POST',
-            ...commonFetchOptions,
             body: formData,
         });
 
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.detail || `Failed to send combined query (${response.status})`);
+            throw new Error(`${response.status} ${response.statusText}`);
         }
 
         return await response.json();
     } catch (error) {
         console.error('Error sending combined query:', error);
-        // Return mock data on error if enabled
-        if (USE_MOCK_DATA) {
-            console.log('Falling back to mock data due to error');
-            return mockResponses.textQuery;
-        }
         throw error;
     }
 }; 

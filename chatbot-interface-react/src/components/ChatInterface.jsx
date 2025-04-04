@@ -69,18 +69,18 @@ const ToastNotification = ({ message, onClose, isError = false }) => {
  */
 const ChatInterface = () => {
     const [messages, setMessages] = useState([
-        { id: 1, content: "Bonjour! Comment puis-je vous aider aujourd'hui ? 😊\nJe m'occupes principalement de répondre à vos demandes RH.", isUser: false, sources: [] }
+        { id: 1, content: "Bonjour! Comment puis-je vous aider aujourd'hui. Je m'occupes de répondre à vos demandes RH", isUser: false, sources: [] }
     ]);
     const [inputMessage, setInputMessage] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [toast, setToast] = useState({ message: '', visible: false, isError: false });
     const [selectedFile, setSelectedFile] = useState(null);
     const [selectedImage, setSelectedImage] = useState(null);
-    const [activeChat] = useState('Session 1');
-    const [showToast, setShowToast] = useState(false);
-    const [toastMessage, setToastMessage] = useState('');
-    const [isToastError, setIsToastError] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
+    const [showAboutModal, setShowAboutModal] = useState(false);
     const [showUploadModal, setShowUploadModal] = useState(false);
     const messagesEndRef = useRef(null);
+    const imageInputRef = useRef(null);
+    const [activeChat] = useState('Session 1');
 
     // Set document title
     useEffect(() => {
@@ -101,62 +101,62 @@ const ChatInterface = () => {
 
     // Display toast message
     const showToastMessage = (message, isError = false) => {
-        setToastMessage(message);
-        setIsToastError(isError);
-        setShowToast(true);
+        setToast({ message, isError, visible: true });
     };
 
-    // Handle sending a text message
-    const handleSendMessage = async (e) => {
-        e.preventDefault();
-        if (inputMessage.trim() === '') return;
+    // Handle sending a message
+    const handleSendMessage = async () => {
+        if ((inputMessage.trim() === '' && !selectedImage) || isLoading) return;
 
-        // Add user message to chat
+        const messageId = Date.now();
+        const messageText = inputMessage.trim();
+
+        // Create user message
         const userMessage = {
-            id: Date.now(),
-            content: inputMessage,
-            isUser: true,
-            sources: []
+            id: messageId,
+            content: messageText || 'Image envoyée',
+            isUser: true
         };
 
+        // Add user message to chat
         setMessages(prev => [...prev, userMessage]);
+
+        // Clear input and image
         setInputMessage('');
+
+        // Start loading
         setIsLoading(true);
 
         try {
             let response;
 
-            // If there's an image selected, use combined query
-            if (selectedImage) {
-                response = await sendCombinedQuery(inputMessage, selectedImage);
-                setSelectedImage(null); // Clear the image after sending
+            // Determine if this is a text, image, or combined query
+            if (selectedImage && messageText) {
+                // Combined text and image query
+                response = await sendCombinedQuery(messageText, selectedImage);
+            } else if (selectedImage) {
+                // Image-only query
+                response = await sendImageQuery(selectedImage);
             } else {
-                // Otherwise, use text query
-                response = await sendTextQuery(inputMessage);
+                // Text-only query
+                response = await sendTextQuery(messageText);
             }
 
             // Add bot response to chat
-            const botResponse = {
-                id: Date.now() + 1,
+            const botMessage = {
+                id: Date.now(),
                 content: response.answer,
                 isUser: false,
-                sources: response.sources
+                sources: response.sources || []
             };
 
-            setMessages(prev => [...prev, botResponse]);
+            setMessages(prev => [...prev, botMessage]);
         } catch (error) {
             console.error('Error sending message:', error);
-            // Add error message to chat
-            const errorMessage = {
-                id: Date.now() + 1,
-                content: "Désolé, une erreur est survenue lors du traitement de votre requête.",
-                isUser: false,
-                sources: []
-            };
-            setMessages(prev => [...prev, errorMessage]);
-            showToastMessage('Erreur lors de l\'envoi du message', true);
+            showToastMessage(`Erreur: ${error.message}`, true);
         } finally {
             setIsLoading(false);
+            setSelectedImage(null);
         }
     };
 
@@ -195,16 +195,6 @@ const ChatInterface = () => {
         } else {
             showToastMessage('Veuillez sélectionner un fichier PDF', true);
         }
-    };
-
-    // Handle image selection from ImageUploadPreview
-    const handleImageSelect = (file) => {
-        setSelectedImage(file);
-    };
-
-    // Handle image removal from ImageUploadPreview
-    const handleImageRemove = () => {
-        setSelectedImage(null);
     };
 
     // This function is currently not used directly but kept for future implementation
@@ -310,7 +300,13 @@ const ChatInterface = () => {
 
                 {/* Input area */}
                 <div className="border-t border-gray-800 p-4">
-                    <form onSubmit={handleSendMessage} className="flex flex-col gap-2">
+                    <form
+                        className="flex flex-col gap-2"
+                        onSubmit={(e) => {
+                            e.preventDefault();
+                            handleSendMessage();
+                        }}
+                    >
                         <div className="flex items-center gap-2">
                             <div className="flex items-center gap-2">
                                 <label htmlFor="file-upload" className="cursor-pointer text-gray-400 hover:text-white">
@@ -346,11 +342,50 @@ const ChatInterface = () => {
                             </button>
                         </div>
 
-                        {/* Image upload preview component */}
-                        <ImageUploadPreview
-                            onImageSelect={handleImageSelect}
-                            onImageRemove={handleImageRemove}
+                        {/* Image upload button */}
+                        <button
+                            type="button"
+                            onClick={() => imageInputRef.current.click()}
+                            className="hover:bg-gray-700 rounded p-2"
+                            title="Ajouter une image à la question"
+                        >
+                            <Paperclip size={20} />
+                        </button>
+
+                        {/* Hidden file input for image upload */}
+                        <input
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => {
+                                if (e.target.files[0]) {
+                                    setSelectedImage(e.target.files[0]);
+                                }
+                            }}
+                            ref={imageInputRef}
+                            className="hidden"
                         />
+
+                        {/* Image preview (if image is selected) */}
+                        {selectedImage && (
+                            <div className="relative mt-2">
+                                <img
+                                    src={URL.createObjectURL(selectedImage)}
+                                    alt="Preview"
+                                    className="max-h-32 rounded-md"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setSelectedImage(null)}
+                                    className="absolute top-1 right-1 bg-red-500 rounded-full p-1"
+                                    title="Supprimer l'image"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                                    </svg>
+                                </button>
+                            </div>
+                        )}
 
                         {/* Display selected file name if any */}
                         {selectedFile && (
@@ -363,11 +398,11 @@ const ChatInterface = () => {
             </div>
 
             {/* Toast notification */}
-            {showToast && (
+            {toast.visible && (
                 <ToastNotification
-                    message={toastMessage}
-                    isError={isToastError}
-                    onClose={() => setShowToast(false)}
+                    message={toast.message}
+                    isError={toast.isError}
+                    onClose={() => setToast({ ...toast, visible: false })}
                 />
             )}
 
