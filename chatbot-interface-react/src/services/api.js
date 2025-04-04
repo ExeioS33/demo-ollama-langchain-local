@@ -7,7 +7,7 @@
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 // Enable this for development if the API is not available
-const USE_MOCK_DATA = true;
+const USE_MOCK_DATA = false;
 
 // Common fetch options for all requests
 const commonFetchOptions = {

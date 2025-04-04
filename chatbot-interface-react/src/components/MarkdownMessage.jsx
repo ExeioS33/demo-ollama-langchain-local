@@ -53,13 +53,14 @@ const MarkdownMessage = ({ isUser, content, sources }) => {
     return (
         <div className={containerClass}>
             <div className={messageClass}>
-                <ReactMarkdown
-                    className="markdown-content whitespace-pre-wrap"
-                    remarkPlugins={[remarkGfm]}
-                    components={components}
-                >
-                    {content}
-                </ReactMarkdown>
+                <div className="whitespace-pre-wrap">
+                    <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={components}
+                    >
+                        {content}
+                    </ReactMarkdown>
+                </div>
 
                 {!isUser && sources && sources.length > 0 && (
                     <SourcesDisplay sources={sources} />

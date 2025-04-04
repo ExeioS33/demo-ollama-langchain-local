@@ -9,7 +9,7 @@ import MarkdownMessage from './MarkdownMessage';
 import { sendTextQuery, uploadDocument, sendImageQuery, sendCombinedQuery } from '../services/api';
 
 // Local logo path
-const CF_LOGO_PATH = '/images/cf-logo.svg';
+const CF_LOGO_PATH = '/images/groupecf_logo.jpeg';
 
 // Toast notification component
 const ToastNotification = ({ message, onClose, isError = false }) => {
