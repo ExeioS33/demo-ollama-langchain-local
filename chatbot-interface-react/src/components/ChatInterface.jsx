@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, Paperclip, Upload, InfoIcon } from 'lucide-react';
 import ImageUploadPreview from './ImageUploadPreview';
 import LoadingIndicator from './LoadingIndicator';
-import SourcesDisplay from './SourcesDisplay';
 import DocumentUpload from './DocumentUpload';
 import Modal from './Modal';
 import MarkdownMessage from './MarkdownMessage';
@@ -11,20 +10,50 @@ import { sendTextQuery, uploadDocument, sendImageQuery, sendCombinedQuery } from
 // Local logo path
 const CF_LOGO_PATH = '/images/groupecf_logo.jpeg';
 
+// Add this style to the top of the file, after the imports
+const styles = document.createElement('style');
+styles.textContent = `
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out forwards;
+  }
+`;
+document.head.appendChild(styles);
+
 // Toast notification component
 const ToastNotification = ({ message, onClose, isError = false }) => {
     useEffect(() => {
         const timer = setTimeout(() => {
             onClose();
-        }, 5000);
+        }, 8000); // Extended display time to 8 seconds
 
         return () => clearTimeout(timer);
     }, [onClose]);
 
     return (
-        <div className={`fixed top-4 right-4 ${isError ? 'bg-red-500' : 'bg-green-500'} text-white px-4 py-3 rounded-lg shadow-lg flex items-center`}>
-            <span>{message}</span>
-            <button onClick={onClose} className="ml-3 text-white">
+        <div className={`fixed top-4 right-4 ${isError ? 'bg-red-500' : 'bg-green-500'} text-white px-5 py-4 rounded-lg shadow-xl flex items-center max-w-md animate-fade-in`}>
+            <div className="mr-3">
+                {isError ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="15" y1="9" x2="9" y2="15"></line>
+                        <line x1="9" y1="9" x2="15" y2="15"></line>
+                    </svg>
+                ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                        <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                    </svg>
+                )}
+            </div>
+            <div className="flex-1">
+                <span className="font-medium">{message}</span>
+            </div>
+            <button onClick={onClose} className="ml-3 text-white hover:text-gray-200">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <line x1="18" y1="6" x2="6" y2="18"></line>
                     <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -40,7 +69,7 @@ const ToastNotification = ({ message, onClose, isError = false }) => {
  */
 const ChatInterface = () => {
     const [messages, setMessages] = useState([
-        { id: 1, content: "Bonjour! Comment puis-je vous aider aujourd'hui?", isUser: false, sources: [] }
+        { id: 1, content: "Bonjour! Comment puis-je vous aider aujourd'hui ? Je m'occupes principalement de répondre à vos demandes RH 😊.", isUser: false, sources: [] }
     ]);
     const [inputMessage, setInputMessage] = useState('');
     const [selectedFile, setSelectedFile] = useState(null);
@@ -135,15 +164,6 @@ const ChatInterface = () => {
     const handleUploadSuccess = (fileName) => {
         showToastMessage(`Le document "${fileName}" a été ajouté à la bibliothèque`);
 
-        // Add confirmation message to chat
-        const uploadMessage = {
-            id: Date.now(),
-            content: `Le document "${fileName}" a été ajouté à la bibliothèque.`,
-            isUser: false,
-            sources: []
-        };
-        setMessages(prev => [...prev, uploadMessage]);
-
         // Close the modal
         setShowUploadModal(false);
     };
@@ -165,15 +185,6 @@ const ChatInterface = () => {
             try {
                 await uploadDocument(file);
                 showToastMessage(`Le document "${file.name}" a été ajouté à la bibliothèque`);
-
-                // Add confirmation message to chat
-                const uploadMessage = {
-                    id: Date.now(),
-                    content: `Le document "${file.name}" a été ajouté à la bibliothèque.`,
-                    isUser: false,
-                    sources: []
-                };
-                setMessages(prev => [...prev, uploadMessage]);
             } catch (error) {
                 console.error('Error uploading document:', error);
                 showToastMessage('Erreur lors de l\'ajout du document', true);
