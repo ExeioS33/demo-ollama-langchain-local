@@ -23,7 +23,24 @@ const commonFetchOptions = {
  */
 const mockResponses = {
     textQuery: {
-        answer: "Voici une réponse simulée du système RAG. Cette fonctionnalité est actuellement en mode développement et les réponses réelles seront disponibles une fois l'API connectée.",
+        answer: `# Réponse du système RAG
+
+Voici une réponse simulée du système RAG avec support **Markdown**. 
+
+## Fonctionnalités principales
+- Support des listes
+- Formatage de texte *italique* et **gras**
+- \`Code inline\` pour références techniques
+
+### Exemple de code
+\`\`\`python
+def hello_world():
+    print("Hello, RAG system!")
+\`\`\`
+
+> Cette fonctionnalité est actuellement en mode développement et les réponses réelles seront disponibles une fois l'API connectée.
+
+[Documentation supplémentaire](https://example.com)`,
         sources: [
             {
                 title: "Document exemple",

@@ -5,29 +5,11 @@ import LoadingIndicator from './LoadingIndicator';
 import SourcesDisplay from './SourcesDisplay';
 import DocumentUpload from './DocumentUpload';
 import Modal from './Modal';
+import MarkdownMessage from './MarkdownMessage';
 import { sendTextQuery, uploadDocument, sendImageQuery, sendCombinedQuery } from '../services/api';
 
 // Local logo path
 const CF_LOGO_PATH = '/images/cf-logo.svg';
-
-// Message component to display chat messages with optional sources
-const Message = ({ isUser, content, sources }) => {
-    return (
-        <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-6`}>
-            <div
-                className={`max-w-[80%] rounded-lg px-4 py-3 ${isUser
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-800 text-white'
-                    }`}
-            >
-                <div className="whitespace-pre-wrap">{content}</div>
-                {!isUser && sources && sources.length > 0 && (
-                    <SourcesDisplay sources={sources} />
-                )}
-            </div>
-        </div>
-    );
-};
 
 // Toast notification component
 const ToastNotification = ({ message, onClose, isError = false }) => {
@@ -271,7 +253,7 @@ const ChatInterface = () => {
                         onClick={() => {
                             const aboutMessage = {
                                 id: Date.now(),
-                                content: "CFChat est un assistant conversationnel basé sur la Récupération Augmentée de Génération (RAG). Il vous permet d'interagir avec vos documents et d'obtenir des réponses précises basées sur leurs contenus.",
+                                content: "# À propos de CFChat\n\nCFChat est un assistant conversationnel basé sur la **Récupération Augmentée de Génération (RAG)**. Il vous permet d'interagir avec vos documents et d'obtenir des réponses précises basées sur leurs contenus.\n\n## Fonctionnalités\n\n- Interrogation de documents textuels\n- Analyse d'images et de contenus multimodaux\n- Support des formats PDF avec extraction intelligente\n- Interface conversationnelle intuitive",
                                 isUser: false,
                                 sources: []
                             };
@@ -304,7 +286,7 @@ const ChatInterface = () => {
                 {/* Messages area */}
                 <div className="flex-1 overflow-y-auto p-6">
                     {messages.map(message => (
-                        <Message
+                        <MarkdownMessage
                             key={message.id}
                             isUser={message.isUser}
                             content={message.content}
