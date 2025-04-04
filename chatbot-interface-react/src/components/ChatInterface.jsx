@@ -7,6 +7,9 @@ import DocumentUpload from './DocumentUpload';
 import Modal from './Modal';
 import { sendTextQuery, uploadDocument, sendImageQuery, sendCombinedQuery } from '../services/api';
 
+// Local logo path
+const CF_LOGO_PATH = '/images/cf-logo.svg';
+
 // Message component to display chat messages with optional sources
 const Message = ({ isUser, content, sources }) => {
     return (
@@ -71,6 +74,13 @@ const ChatInterface = () => {
     // Set document title
     useEffect(() => {
         document.title = "CFChat";
+
+        // Set favicon
+        const link = document.querySelector("link[rel~='icon']") || document.createElement('link');
+        link.type = 'image/svg+xml';
+        link.rel = 'icon';
+        link.href = CF_LOGO_PATH;
+        document.getElementsByTagName('head')[0].appendChild(link);
     }, []);
 
     // Auto scroll to bottom when messages change
@@ -238,7 +248,7 @@ const ChatInterface = () => {
                 {/* Logo and Brand */}
                 <div className="p-4 flex items-center justify-center gap-2 border-b border-gray-800">
                     <img
-                        src="https://media.licdn.com/dms/image/v2/D4E0BAQHfnhLIsEztTQ/company-logo_200_200/company-logo_200_200/0/1721126603488/groupecf_logo?e=2147483647&v=beta&t=HGdMzdb9xrP0sOORtLTJtATA_irZt2Hgj_sUZWiSJNc"
+                        src={CF_LOGO_PATH}
                         alt="CF Logo"
                         className="h-16 w-16 rounded-full"
                     />
@@ -280,7 +290,7 @@ const ChatInterface = () => {
                 <div className="p-4 border-b border-gray-800 flex justify-between items-center">
                     <div className="flex items-center gap-3">
                         <img
-                            src="https://media.licdn.com/dms/image/v2/D4E0BAQHfnhLIsEztTQ/company-logo_200_200/company-logo_200_200/0/1721126603488/groupecf_logo?e=2147483647&v=beta&t=HGdMzdb9xrP0sOORtLTJtATA_irZt2Hgj_sUZWiSJNc"
+                            src={CF_LOGO_PATH}
                             alt="CF Logo"
                             className="h-8 w-8 rounded-full"
                         />

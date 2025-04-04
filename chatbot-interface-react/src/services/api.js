@@ -6,11 +6,41 @@
 // Default API URL, can be overridden by environment variables
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
+// Enable this for development if the API is not available
+const USE_MOCK_DATA = true;
+
 // Common fetch options for all requests
 const commonFetchOptions = {
-    credentials: 'include',
+    // Remove credentials to avoid CORS preflight issues
+    // credentials: 'include',
     headers: {
         'Accept': 'application/json'
+    }
+};
+
+/**
+ * Mock responses for development when API is not available
+ */
+const mockResponses = {
+    textQuery: {
+        answer: "Voici une réponse simulée du système RAG. Cette fonctionnalité est actuellement en mode développement et les réponses réelles seront disponibles une fois l'API connectée.",
+        sources: [
+            {
+                title: "Document exemple",
+                text: "Ceci est un exemple de source qui serait retournée par le système RAG.",
+                page_number: 1,
+                is_image: false
+            },
+            {
+                title: "Image exemple",
+                text: "Description d'une image qui pourrait être retournée comme source.",
+                is_image: true
+            }
+        ]
+    },
+    documentUpload: {
+        ids: ["mock-id-1", "mock-id-2"],
+        message: "Document ajouté avec succès (simulation)."
     }
 };
 
@@ -23,6 +53,14 @@ const commonFetchOptions = {
  */
 export const sendTextQuery = async (query, topK = 3, imageOnly = false) => {
     try {
+        // Return mock data if API is not available
+        if (USE_MOCK_DATA) {
+            console.log('Using mock data for text query:', query);
+            // Add a delay to simulate network request
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            return mockResponses.textQuery;
+        }
+
         const response = await fetch(`${API_BASE_URL}/query/text`, {
             method: 'POST',
             ...commonFetchOptions,
@@ -45,6 +83,11 @@ export const sendTextQuery = async (query, topK = 3, imageOnly = false) => {
         return await response.json();
     } catch (error) {
         console.error('Error sending text query:', error);
+        // Return mock data on error if enabled
+        if (USE_MOCK_DATA) {
+            console.log('Falling back to mock data due to error');
+            return mockResponses.textQuery;
+        }
         throw error;
     }
 };
@@ -60,6 +103,14 @@ export const sendTextQuery = async (query, topK = 3, imageOnly = false) => {
  */
 export const uploadDocument = async (file, description = null, chunkSize = null, chunkOverlap = null, extractImages = true) => {
     try {
+        // Return mock data if API is not available
+        if (USE_MOCK_DATA) {
+            console.log('Using mock data for document upload:', file.name);
+            // Add a delay to simulate network request
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            return mockResponses.documentUpload;
+        }
+
         const formData = new FormData();
         formData.append('document', file);
 
@@ -82,6 +133,11 @@ export const uploadDocument = async (file, description = null, chunkSize = null,
         return await response.json();
     } catch (error) {
         console.error('Error uploading document:', error);
+        // Return mock data on error if enabled
+        if (USE_MOCK_DATA) {
+            console.log('Falling back to mock data due to error');
+            return mockResponses.documentUpload;
+        }
         throw error;
     }
 };
@@ -95,6 +151,14 @@ export const uploadDocument = async (file, description = null, chunkSize = null,
  */
 export const sendImageQuery = async (imageFile, query = 'Décris cette image', topK = 3) => {
     try {
+        // Return mock data if API is not available
+        if (USE_MOCK_DATA) {
+            console.log('Using mock data for image query:', imageFile.name);
+            // Add a delay to simulate network request
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            return mockResponses.textQuery;
+        }
+
         const formData = new FormData();
         formData.append('image', imageFile);
         formData.append('query', query);
@@ -114,6 +178,11 @@ export const sendImageQuery = async (imageFile, query = 'Décris cette image', t
         return await response.json();
     } catch (error) {
         console.error('Error sending image query:', error);
+        // Return mock data on error if enabled
+        if (USE_MOCK_DATA) {
+            console.log('Falling back to mock data due to error');
+            return mockResponses.textQuery;
+        }
         throw error;
     }
 };
@@ -128,6 +197,14 @@ export const sendImageQuery = async (imageFile, query = 'Décris cette image', t
  */
 export const sendCombinedQuery = async (query, imageFile = null, referenceImage = false, topK = 3) => {
     try {
+        // Return mock data if API is not available
+        if (USE_MOCK_DATA) {
+            console.log('Using mock data for combined query:', query);
+            // Add a delay to simulate network request
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            return mockResponses.textQuery;
+        }
+
         const formData = new FormData();
         formData.append('query', query);
         if (imageFile) formData.append('image', imageFile);
@@ -148,6 +225,11 @@ export const sendCombinedQuery = async (query, imageFile = null, referenceImage 
         return await response.json();
     } catch (error) {
         console.error('Error sending combined query:', error);
+        // Return mock data on error if enabled
+        if (USE_MOCK_DATA) {
+            console.log('Falling back to mock data due to error');
+            return mockResponses.textQuery;
+        }
         throw error;
     }
 }; 
