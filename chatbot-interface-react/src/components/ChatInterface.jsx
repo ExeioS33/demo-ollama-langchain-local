@@ -1,8 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { Send, Paperclip, Image, Upload, X, InfoIcon } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Send, Paperclip, Upload, InfoIcon } from 'lucide-react';
+import ImageUploadPreview from './ImageUploadPreview';
+import LoadingIndicator from './LoadingIndicator';
+import SourcesDisplay from './SourcesDisplay';
+import DocumentUpload from './DocumentUpload';
+import Modal from './Modal';
+import { sendTextQuery, uploadDocument, sendImageQuery, sendCombinedQuery } from '../services/api';
 
-// Message component to display chat messages
-const Message = ({ isUser, content }) => {
+// Message component to display chat messages with optional sources
+const Message = ({ isUser, content, sources }) => {
     return (
         <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-6`}>
             <div
@@ -11,14 +17,17 @@ const Message = ({ isUser, content }) => {
                     : 'bg-gray-800 text-white'
                     }`}
             >
-                {content}
+                <div className="whitespace-pre-wrap">{content}</div>
+                {!isUser && sources && sources.length > 0 && (
+                    <SourcesDisplay sources={sources} />
+                )}
             </div>
         </div>
     );
 };
 
 // Toast notification component
-const ToastNotification = ({ message, onClose }) => {
+const ToastNotification = ({ message, onClose, isError = false }) => {
     useEffect(() => {
         const timer = setTimeout(() => {
             onClose();
@@ -28,73 +37,197 @@ const ToastNotification = ({ message, onClose }) => {
     }, [onClose]);
 
     return (
-        <div className="fixed top-4 right-4 bg-green-500 text-white px-4 py-3 rounded-lg shadow-lg flex items-center">
+        <div className={`fixed top-4 right-4 ${isError ? 'bg-red-500' : 'bg-green-500'} text-white px-4 py-3 rounded-lg shadow-lg flex items-center`}>
             <span>{message}</span>
             <button onClick={onClose} className="ml-3 text-white">
-                <X size={18} />
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
             </button>
         </div>
     );
 };
 
+/**
+ * Main chat interface component for the RAG system
+ * Handles all user interactions, API calls, and UI states
+ */
 const ChatInterface = () => {
     const [messages, setMessages] = useState([
-        { id: 1, content: "Bonjour! Comment puis-je vous aider aujourd'hui?", isUser: false }
+        { id: 1, content: "Bonjour! Comment puis-je vous aider aujourd'hui?", isUser: false, sources: [] }
     ]);
     const [inputMessage, setInputMessage] = useState('');
     const [selectedFile, setSelectedFile] = useState(null);
-    const [activeChat, setActiveChat] = useState('Session 1');
+    const [selectedImage, setSelectedImage] = useState(null);
+    const [activeChat] = useState('Session 1');
     const [showToast, setShowToast] = useState(false);
+    const [toastMessage, setToastMessage] = useState('');
+    const [isToastError, setIsToastError] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
+    const [showUploadModal, setShowUploadModal] = useState(false);
+    const messagesEndRef = useRef(null);
 
     // Set document title
     useEffect(() => {
         document.title = "CFChat";
     }, []);
 
-    // Handle sending a message
-    const handleSendMessage = (e) => {
+    // Auto scroll to bottom when messages change
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages]);
+
+    // Display toast message
+    const showToastMessage = (message, isError = false) => {
+        setToastMessage(message);
+        setIsToastError(isError);
+        setShowToast(true);
+    };
+
+    // Handle sending a text message
+    const handleSendMessage = async (e) => {
         e.preventDefault();
         if (inputMessage.trim() === '') return;
 
-        const newMessage = {
+        // Add user message to chat
+        const userMessage = {
             id: Date.now(),
             content: inputMessage,
-            isUser: true
+            isUser: true,
+            sources: []
         };
 
-        setMessages([...messages, newMessage]);
+        setMessages(prev => [...prev, userMessage]);
         setInputMessage('');
+        setIsLoading(true);
 
-        // Simulate bot response
-        setTimeout(() => {
+        try {
+            let response;
+
+            // If there's an image selected, use combined query
+            if (selectedImage) {
+                response = await sendCombinedQuery(inputMessage, selectedImage);
+                setSelectedImage(null); // Clear the image after sending
+            } else {
+                // Otherwise, use text query
+                response = await sendTextQuery(inputMessage);
+            }
+
+            // Add bot response to chat
             const botResponse = {
                 id: Date.now() + 1,
-                content: "Je suis en train de traiter votre requête...",
-                isUser: false
+                content: response.answer,
+                isUser: false,
+                sources: response.sources
             };
+
             setMessages(prev => [...prev, botResponse]);
-        }, 1000);
+        } catch (error) {
+            console.error('Error sending message:', error);
+            // Add error message to chat
+            const errorMessage = {
+                id: Date.now() + 1,
+                content: "Désolé, une erreur est survenue lors du traitement de votre requête.",
+                isUser: false,
+                sources: []
+            };
+            setMessages(prev => [...prev, errorMessage]);
+            showToastMessage('Erreur lors de l\'envoi du message', true);
+        } finally {
+            setIsLoading(false);
+        }
     };
 
-    // Handle file upload
-    const handleFileUpload = (e) => {
-        const file = e.target.files[0];
-        if (file && file.type === 'application/pdf') {
-            setSelectedFile(file);
-            // Simulate success notification
-            setTimeout(() => {
-                setShowToast(true);
+    // Handle document file upload success
+    const handleUploadSuccess = (fileName) => {
+        showToastMessage(`Le document "${fileName}" a été ajouté à la bibliothèque`);
 
-                // Also add a message to the chat
+        // Add confirmation message to chat
+        const uploadMessage = {
+            id: Date.now(),
+            content: `Le document "${fileName}" a été ajouté à la bibliothèque.`,
+            isUser: false,
+            sources: []
+        };
+        setMessages(prev => [...prev, uploadMessage]);
+
+        // Close the modal
+        setShowUploadModal(false);
+    };
+
+    // Handle document upload error
+    const handleUploadError = (errorMessage) => {
+        showToastMessage(errorMessage, true);
+    };
+
+    // Handle quick document upload (without metadata)
+    const handleQuickFileUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        if (file.type === 'application/pdf') {
+            setSelectedFile(file);
+            setIsLoading(true);
+
+            try {
+                await uploadDocument(file);
+                showToastMessage(`Le document "${file.name}" a été ajouté à la bibliothèque`);
+
+                // Add confirmation message to chat
                 const uploadMessage = {
                     id: Date.now(),
                     content: `Le document "${file.name}" a été ajouté à la bibliothèque.`,
-                    isUser: false
+                    isUser: false,
+                    sources: []
                 };
                 setMessages(prev => [...prev, uploadMessage]);
-            }, 1500);
-        } else if (file) {
-            alert("Veuillez sélectionner un fichier PDF.");
+            } catch (error) {
+                console.error('Error uploading document:', error);
+                showToastMessage('Erreur lors de l\'ajout du document', true);
+            } finally {
+                setIsLoading(false);
+                setSelectedFile(null);
+            }
+        } else {
+            showToastMessage('Veuillez sélectionner un fichier PDF', true);
+        }
+    };
+
+    // Handle image selection from ImageUploadPreview
+    const handleImageSelect = (file) => {
+        setSelectedImage(file);
+    };
+
+    // Handle image removal from ImageUploadPreview
+    const handleImageRemove = () => {
+        setSelectedImage(null);
+    };
+
+    // This function is currently not used directly but kept for future implementation
+    // eslint-disable-next-line no-unused-vars
+    const handleImageQuery = async (file) => {
+        if (!file) return;
+
+        setIsLoading(true);
+
+        try {
+            const response = await sendImageQuery(file);
+
+            // Add bot response to chat
+            const botResponse = {
+                id: Date.now() + 1,
+                content: response.answer,
+                isUser: false,
+                sources: response.sources
+            };
+
+            setMessages(prev => [...prev, botResponse]);
+        } catch (error) {
+            console.error('Error sending image query:', error);
+            showToastMessage('Erreur lors de l\'analyse de l\'image', true);
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -114,20 +247,13 @@ const ChatInterface = () => {
                 {/* Simplified sidebar with only two buttons */}
                 <div className="flex-1 flex flex-col p-4 gap-3">
                     {/* Enrichir la bibliothèque button */}
-                    <label
-                        htmlFor="document-upload"
+                    <button
+                        onClick={() => setShowUploadModal(true)}
                         className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white py-3 px-4 rounded-lg transition-colors cursor-pointer"
                     >
                         <Upload size={18} />
                         <span>Enrichir la bibliothèque</span>
-                    </label>
-                    <input
-                        id="document-upload"
-                        type="file"
-                        accept=".pdf"
-                        onChange={handleFileUpload}
-                        className="hidden"
-                    />
+                    </button>
 
                     {/* A propos button */}
                     <button
@@ -136,7 +262,8 @@ const ChatInterface = () => {
                             const aboutMessage = {
                                 id: Date.now(),
                                 content: "CFChat est un assistant conversationnel basé sur la Récupération Augmentée de Génération (RAG). Il vous permet d'interagir avec vos documents et d'obtenir des réponses précises basées sur leurs contenus.",
-                                isUser: false
+                                isUser: false,
+                                sources: []
                             };
                             setMessages(prev => [...prev, aboutMessage]);
                         }}
@@ -171,68 +298,88 @@ const ChatInterface = () => {
                             key={message.id}
                             isUser={message.isUser}
                             content={message.content}
+                            sources={message.sources}
                         />
                     ))}
+                    {isLoading && <LoadingIndicator />}
+                    <div ref={messagesEndRef} />
                 </div>
 
                 {/* Input area */}
                 <div className="border-t border-gray-800 p-4">
-                    <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+                    <form onSubmit={handleSendMessage} className="flex flex-col gap-2">
                         <div className="flex items-center gap-2">
-                            <label htmlFor="file-upload" className="cursor-pointer text-gray-400 hover:text-white">
-                                <Paperclip size={20} />
-                            </label>
+                            <div className="flex items-center gap-2">
+                                <label htmlFor="file-upload" className="cursor-pointer text-gray-400 hover:text-white">
+                                    <Paperclip size={20} />
+                                </label>
+                                <input
+                                    id="file-upload"
+                                    type="file"
+                                    accept=".pdf"
+                                    onChange={handleQuickFileUpload}
+                                    className="hidden"
+                                />
+                            </div>
+
                             <input
-                                id="file-upload"
-                                type="file"
-                                accept=".pdf"
-                                onChange={handleFileUpload}
-                                className="hidden"
+                                type="text"
+                                value={inputMessage}
+                                onChange={(e) => setInputMessage(e.target.value)}
+                                placeholder="Send a message"
+                                className="flex-1 bg-gray-800 rounded-lg border border-gray-700 py-3 px-4 focus:outline-none focus:border-blue-500 text-white"
+                                disabled={isLoading}
                             />
-                            <label htmlFor="image-upload" className="cursor-pointer text-gray-400 hover:text-white">
-                                <Image size={20} />
-                            </label>
-                            <input
-                                id="image-upload"
-                                type="file"
-                                accept="image/*"
-                                className="hidden"
-                            />
+
+                            <button
+                                type="submit"
+                                disabled={!inputMessage.trim() || isLoading}
+                                className={`rounded-lg p-3 ${inputMessage.trim() && !isLoading
+                                    ? 'bg-blue-600 hover:bg-blue-700'
+                                    : 'bg-gray-800 cursor-not-allowed'
+                                    } transition-colors`}
+                            >
+                                <Send size={20} />
+                            </button>
                         </div>
 
-                        <input
-                            type="text"
-                            value={inputMessage}
-                            onChange={(e) => setInputMessage(e.target.value)}
-                            placeholder="Send a message"
-                            className="flex-1 bg-gray-800 rounded-lg border border-gray-700 py-3 px-4 focus:outline-none focus:border-blue-500 text-white"
+                        {/* Image upload preview component */}
+                        <ImageUploadPreview
+                            onImageSelect={handleImageSelect}
+                            onImageRemove={handleImageRemove}
                         />
 
-                        <button
-                            type="submit"
-                            disabled={!inputMessage.trim()}
-                            className={`rounded-lg p-3 ${inputMessage.trim() ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-800 cursor-not-allowed'} transition-colors`}
-                        >
-                            <Send size={20} />
-                        </button>
+                        {/* Display selected file name if any */}
+                        {selectedFile && (
+                            <div className="mt-2 text-sm text-gray-400">
+                                Fichier sélectionné: {selectedFile.name}
+                            </div>
+                        )}
                     </form>
-
-                    {/* Display selected file name if any */}
-                    {selectedFile && (
-                        <div className="mt-2 text-sm text-gray-400">
-                            Fichier sélectionné: {selectedFile.name}
-                        </div>
-                    )}
                 </div>
             </div>
 
             {/* Toast notification */}
             {showToast && (
                 <ToastNotification
-                    message="Document ajouté à la bibliothèque"
+                    message={toastMessage}
+                    isError={isToastError}
                     onClose={() => setShowToast(false)}
                 />
             )}
+
+            {/* Document Upload Modal */}
+            <Modal
+                isOpen={showUploadModal}
+                onClose={() => setShowUploadModal(false)}
+                title="Enrichir la bibliothèque"
+                size="large"
+            >
+                <DocumentUpload
+                    onUploadSuccess={handleUploadSuccess}
+                    onUploadError={handleUploadError}
+                />
+            </Modal>
         </div>
     );
 };
