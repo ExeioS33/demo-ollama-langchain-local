@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Send, PlusCircle, Paperclip, Image } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Send, Paperclip, Image, Upload, X, InfoIcon } from 'lucide-react';
 
 // Message component to display chat messages
 const Message = ({ isUser, content }) => {
@@ -17,16 +17,22 @@ const Message = ({ isUser, content }) => {
     );
 };
 
-// Sidebar chat item component
-const ChatItem = ({ active, title, onClick }) => {
+// Toast notification component
+const ToastNotification = ({ message, onClose }) => {
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            onClose();
+        }, 5000);
+
+        return () => clearTimeout(timer);
+    }, [onClose]);
+
     return (
-        <div
-            onClick={onClick}
-            className={`px-4 py-3 rounded-lg mb-1 cursor-pointer ${active ? 'bg-gray-800' : 'hover:bg-gray-800'}`}
-        >
-            <div className="flex items-center">
-                <span className="text-sm text-gray-300">{title}</span>
-            </div>
+        <div className="fixed top-4 right-4 bg-green-500 text-white px-4 py-3 rounded-lg shadow-lg flex items-center">
+            <span>{message}</span>
+            <button onClick={onClose} className="ml-3 text-white">
+                <X size={18} />
+            </button>
         </div>
     );
 };
@@ -38,18 +44,12 @@ const ChatInterface = () => {
     const [inputMessage, setInputMessage] = useState('');
     const [selectedFile, setSelectedFile] = useState(null);
     const [activeChat, setActiveChat] = useState('Session 1');
+    const [showToast, setShowToast] = useState(false);
 
-    // Chat history
-    const chatHistory = [
-        { id: 1, title: 'Today' },
-        { id: 2, title: 'What can RAG do for me?', isSection: false },
-        { id: 3, title: 'How does Reachats work?', isSection: false },
-        { id: 4, title: 'Create a design system', isSection: false },
-        { id: 5, title: 'How does Multimodal RAG work?', isSection: false },
-        { id: 6, title: 'Last 7 days', isSection: true },
-        { id: 7, title: 'Storybook and RAGblocks', isSection: false },
-        { id: 8, title: 'Who is able to use Reachats?', isSection: false },
-    ];
+    // Set document title
+    useEffect(() => {
+        document.title = "CFChat";
+    }, []);
 
     // Handle sending a message
     const handleSendMessage = (e) => {
@@ -83,6 +83,9 @@ const ChatInterface = () => {
             setSelectedFile(file);
             // Simulate success notification
             setTimeout(() => {
+                setShowToast(true);
+
+                // Also add a message to the chat
                 const uploadMessage = {
                     id: Date.now(),
                     content: `Le document "${file.name}" a été ajouté à la bibliothèque.`,
@@ -99,46 +102,65 @@ const ChatInterface = () => {
         <div className="flex h-screen bg-gray-900 text-white">
             {/* Sidebar */}
             <div className="w-64 flex flex-col bg-gray-900 border-r border-gray-800">
-                {/* New chat button */}
-                <div className="p-4">
-                    <button
-                        className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-lg transition-colors"
-                        onClick={() => {
-                            setMessages([{ id: 1, content: "Bonjour! Comment puis-je vous aider aujourd'hui?", isUser: false }]);
-                            setActiveChat('New Session');
-                        }}
-                    >
-                        <PlusCircle size={18} />
-                        <span>New chat</span>
-                    </button>
+                {/* Logo and Brand */}
+                <div className="p-4 flex items-center justify-center gap-2 border-b border-gray-800">
+                    <img
+                        src="https://media.licdn.com/dms/image/v2/D4E0BAQHfnhLIsEztTQ/company-logo_200_200/company-logo_200_200/0/1721126603488/groupecf_logo?e=2147483647&v=beta&t=HGdMzdb9xrP0sOORtLTJtATA_irZt2Hgj_sUZWiSJNc"
+                        alt="CF Logo"
+                        className="h-16 w-16 rounded-full"
+                    />
                 </div>
 
-                {/* Chat history */}
-                <div className="flex-1 overflow-y-auto p-2">
-                    {chatHistory.map(chat =>
-                        chat.isSection ? (
-                            <div key={chat.id} className="text-xs text-gray-500 font-medium px-4 py-2 uppercase">
-                                {chat.title}
-                            </div>
-                        ) : (
-                            <ChatItem
-                                key={chat.id}
-                                title={chat.title}
-                                active={activeChat === chat.title}
-                                onClick={() => setActiveChat(chat.title)}
-                            />
-                        )
-                    )}
+                {/* Simplified sidebar with only two buttons */}
+                <div className="flex-1 flex flex-col p-4 gap-3">
+                    {/* Enrichir la bibliothèque button */}
+                    <label
+                        htmlFor="document-upload"
+                        className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white py-3 px-4 rounded-lg transition-colors cursor-pointer"
+                    >
+                        <Upload size={18} />
+                        <span>Enrichir la bibliothèque</span>
+                    </label>
+                    <input
+                        id="document-upload"
+                        type="file"
+                        accept=".pdf"
+                        onChange={handleFileUpload}
+                        className="hidden"
+                    />
+
+                    {/* A propos button */}
+                    <button
+                        className="w-full flex items-center justify-center gap-2 bg-gray-800 hover:bg-gray-700 text-white py-3 px-4 rounded-lg transition-colors"
+                        onClick={() => {
+                            const aboutMessage = {
+                                id: Date.now(),
+                                content: "CFChat est un assistant conversationnel basé sur la Récupération Augmentée de Génération (RAG). Il vous permet d'interagir avec vos documents et d'obtenir des réponses précises basées sur leurs contenus.",
+                                isUser: false
+                            };
+                            setMessages(prev => [...prev, aboutMessage]);
+                        }}
+                    >
+                        <InfoIcon size={18} />
+                        <span>A propos</span>
+                    </button>
                 </div>
             </div>
 
             {/* Main chat area */}
             <div className="flex-1 flex flex-col">
-                {/* Chat header */}
+                {/* Chat header with CF logo and title */}
                 <div className="p-4 border-b border-gray-800 flex justify-between items-center">
-                    <h2 className="text-xl font-medium">{activeChat}</h2>
+                    <div className="flex items-center gap-3">
+                        <img
+                            src="https://media.licdn.com/dms/image/v2/D4E0BAQHfnhLIsEztTQ/company-logo_200_200/company-logo_200_200/0/1721126603488/groupecf_logo?e=2147483647&v=beta&t=HGdMzdb9xrP0sOORtLTJtATA_irZt2Hgj_sUZWiSJNc"
+                            alt="CF Logo"
+                            className="h-8 w-8 rounded-full"
+                        />
+                        <h2 className="text-xl font-bold">CFChat</h2>
+                    </div>
                     <div className="text-sm text-gray-400">
-                        {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {activeChat} • {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </div>
                 </div>
 
@@ -203,6 +225,14 @@ const ChatInterface = () => {
                     )}
                 </div>
             </div>
+
+            {/* Toast notification */}
+            {showToast && (
+                <ToastNotification
+                    message="Document ajouté à la bibliothèque"
+                    onClose={() => setShowToast(false)}
+                />
+            )}
         </div>
     );
 };
