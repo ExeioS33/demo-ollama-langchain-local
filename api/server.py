@@ -68,6 +68,19 @@ async def text_query(request: QueryRequest):
         QueryResponse: Réponse avec contexte
     """
     try:
+        # Détection des salutations/questions générales qui ne nécessitent pas le RAG
+        greetings = ["bonjour", "salut", "hello", "hi", "hey", "coucou", "salutations"]
+        query_lower = request.query.lower().strip()
+
+        # Si c'est une simple salutation sans autre contenu
+        if query_lower in greetings or any(
+            query_lower.startswith(g + " ") for g in greetings
+        ):
+            return {
+                "answer": f"Bonjour ! Je suis votre assistant RH. Comment puis-je vous aider aujourd'hui ?",
+                "sources": [],
+            }
+
         result = rag_system.query(request.query, top_k=request.top_k)
         return result
     except Exception as e:

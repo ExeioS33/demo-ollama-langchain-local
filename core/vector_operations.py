@@ -191,7 +191,7 @@ class FAISS:
         os.makedirs(persist_directory, exist_ok=True)
 
         # Initialiser l'index FAISS
-        self.dimension = self.embedder.dimension
+        self.dimension = self.embedder.embedding_dim
         self.index = faiss.IndexFlatL2(self.dimension)
 
         # Charger l'index s'il existe

@@ -49,6 +49,8 @@ class MultimodalEmbedder:
 
         # Dimension des embeddings
         self.embedding_dim = self.model.config.projection_dim
+        # Alias for backward compatibility
+        self.dimension = self.embedding_dim
         print(f"Dimension des embeddings: {self.embedding_dim}")
 
     def embed_text(self, text: str) -> np.ndarray:
