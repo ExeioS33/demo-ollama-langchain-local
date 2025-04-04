@@ -69,7 +69,7 @@ const ToastNotification = ({ message, onClose, isError = false }) => {
  */
 const ChatInterface = () => {
     const [messages, setMessages] = useState([
-        { id: 1, content: "Bonjour! Comment puis-je vous aider aujourd'hui. Je m'occupes de répondre à vos demandes RH", isUser: false, sources: [] }
+        { id: 1, content: "Bonjour! Comment puis-je vous aider aujourd'hui. Je m'occupes de répondre à vos demandes RH.", isUser: false, sources: [] }
     ]);
     const [inputMessage, setInputMessage] = useState('');
     const [isLoading, setIsLoading] = useState(false);
